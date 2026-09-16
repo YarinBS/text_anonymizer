@@ -1,0 +1,34 @@
+DATA_PATH: data/only_injections_freetext.csv
+COLUMNS_TO_DEIDENTIFY: ["summary_and_discussion"]
+MODEL_PATH: ${MODEL_PATH}
+
+LLAMA_CPP_CONFIG:
+  MODEL_CONFIG: {
+    "n_ctx": 4096,
+    "verbose": False,
+    "n_gpu_layers": -1,  # -1 to load to all GPU layers, 0 for none
+    "n_threads": 64,
+    "n_threads_batch": 64,
+    "n_batch": 1024,
+    "flash_attn": True,
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,  # was 1200
+    "temperature": 0,
+  }
+
+# vLLM configuration — used by anonymizer_vllm.py
+# Uses HuggingFace safetensors model from MODEL_PATH (not GGUF)
+VLLM_CONFIG:
+  MODEL_CONFIG: {
+    "tensor_parallel_size": 2,          # Number of GPUs for tensor parallelism (4x L40 = ~184GB total VRAM)
+    "gpu_memory_utilization": 0.85,     # Fraction of GPU memory vLLM can use for KV cache + model (0.85 leaves headroom for CUDA graphs)
+    "max_model_len": 16384,              # Max context length (equivalent to n_ctx in llama-cpp-python), was 4096
+    "enable_prefix_caching": True,      # Cache KV states for shared prompt prefixes (replaces LlamaRAMCache)
+    "dtype": "bfloat16",                # Model dtype (safetensors are in bfloat16)
+    "enforce_eager": True,              # Disable torch.compile to avoid Dynamo errors
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,
+    "temperature": 0,
+  }
