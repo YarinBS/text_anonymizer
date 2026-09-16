@@ -1,85 +1,83 @@
-# text_anonimyzer
+# Text Anonymizer
 
-`text_anonimyzer` anonymizes clinical free-text by extracting personally identifiable information (PII) and replacing it with redaction placeholders.
+Text Anonymizer processes clinical free text with a local vLLM language model. It extracts configured personally identifiable information (PII) and replaces detected values with redaction placeholders such as `[REDACTED_PATIENT_NAME]`.
 
-For **end users**, the important runtime files are the Python modules directly under
-`src/`:
+The repository contains the current pipeline under `src/`, configuration under `config/`, installation scripts under `scripts/`, and automated tests under `tests/`.
 
-1. `src/main.py` — pipeline entry point. Loads the configured model and data, runs
-   PII extraction and redaction for each configured column, writes per-column text
-   outputs, and saves a final CSV with deidentified columns.
-2. `src/utils.py` — core anonymization logic. Defines the PII schema, loads the
-   vLLM model, loads text/CSV data, builds the extraction prompt, parses model
-   output, and replaces extracted PII in the source text.
-3. `src/config.py` — loads `config/config.yaml` and `.env` values for the runtime
-   modules.
-4. `src/logger.py` — configures console logging and timestamped log files under
-   `logs/`.
+## Requirements
 
-Files under `src/legacy/` are old experiment and evaluation scripts. They are kept
-for reference, but they are not needed to run the current pipeline.
+- Python 3.12
+- A local Hugging Face model supported by vLLM
+- A compatible CUDA/GPU environment for the configured model
 
-## What the pipeline does
+The exact Python package versions are listed in `requirements.txt`.
 
-The pipeline:
-1. Loads clinical notes from `DATA_PATH` (`.csv` or `.txt`)
-2. Loads the configured vLLM model from `MODEL_PATH`
-3. Extracts structured PII fields from each note
-4. Replaces detected PII spans in the original text with placeholders like `[REDACTED_PATIENT_NAME]`
-5. Adds the deidentified columns back to the source DataFrame
-6. Writes a final CSV. CSV fields containing newlines are preserved correctly.
+## Installation
 
-## Configure paths and model settings
-
-Edit `config/config.yaml` before running:
-- `DATA_PATH`: input file path (`.csv` or `.txt`)
-- `COLUMNS_TO_DEIDENTIFY`: CSV columns to process
-- `MODEL_PATH`: Hugging Face model path used by vLLM
-- `VLLM_CONFIG`: vLLM model and generation settings
-- `LLAMA_CPP_CONFIG`: legacy llama.cpp settings kept for older code paths
-
-If the input is CSV, every column in `COLUMNS_TO_DEIDENTIFY` must exist in the input
-file.
-
-## Install and run
+Create the virtual environment and install the pinned dependencies:
 
 ```bash
-pip install -r requirements.txt
+bash scripts/setup.sh
+```
+
+Alternatively, install the dependencies in an existing environment:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+## Configuration
+
+Copy the environment template and set the local model path:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```dotenv
+MODEL_PATH=/path/to/your/Llama-3.3-70B-Instruct
+```
+
+Edit `config/config.yaml` to set:
+
+- `DATA_PATH`: the input CSV or TXT file. Relative paths are resolved from the repository root.
+- `COLUMNS_TO_DEIDENTIFY`: CSV columns to process. TXT input requires exactly one column name.
+- `VLLM_CONFIG`: model and generation settings.
+
+The configuration file uses a repository-relative default data path. Replace it with the path to data that you are authorized to process.
+
+## Usage
+
+Run the pipeline from any directory:
+
+```bash
 python src/main.py
 ```
 
-## Repository structure
+For CSV input, the pipeline:
 
-```text
-.
-├── README.md
-├── NOTES.md
-├── TODO.md
-├── requirements.txt
-├── config/
-│   └── config.yaml
-├── data/
-│   ├── injections_merged.csv
-│   ├── only_injections_freetext.csv
-│   └── tagged_samples.json
-├── notebooks/
-│   └── exploratory notebooks and intermediate analysis files
-├── results/
-│   └── historical run outputs, evaluation reports, and analysis artifacts
-├── scripts/
-│   ├── install_cuda_env.sh
-│   └── setup.sh
-└── src/
-    ├── main.py
-    ├── utils.py
-    ├── config.py
-    ├── logger.py
-    └── legacy/
-        └── old experiment and evaluation scripts
+1. Loads the complete input DataFrame.
+2. Processes valid text values in each configured column.
+3. Adds a `<column_name>_deidentified` column for each processed column.
+4. Preserves the original columns and row order.
+5. Writes `<input_name>_deidentified_final.csv` beside the input file.
+
+For TXT input, each non-empty line is treated as one record. The configured column name is used for the original text column, and the output CSV contains both that column and its deidentified counterpart.
+
+Fields containing embedded newlines are preserved correctly in CSV output. If the model returns a different number of results than the number of input records, the pipeline stops before writing output.
+
+## Privacy
+
+Only process data you are authorized to use. Do not commit input data, generated outputs, environment files, model credentials, or local model paths. These are excluded by `.gitignore` where appropriate.
+
+The current pipeline intentionally retains dates in the text and preserves the original input columns in the output CSV. Review and remove sensitive original data before sharing results.
+
+## Testing
+
+Run the tests after installing the dependencies:
+
+```bash
+python -m pytest
 ```
-
-## Notes for users
-
-- `src/main.py` is the script you run.
-- `src/utils.py`, `src/config.py`, and `src/logger.py` are the supporting runtime modules.
-- Ignore `src/legacy/` unless you are inspecting older experiments or evaluation code.
