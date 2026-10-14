@@ -75,7 +75,9 @@ def build_eval_set(output_path: Path, from_report: str = None, seed: int = 42, n
         data = pd.read_csv(config["DATA_PATH"])
         texts = data[data[column].notnull()][column].tolist()
         random.seed(seed)
-        base_texts = random.sample(texts, n_samples + 250)[:n_samples]
+        # The old harness drew n + 250 texts and used the first n; min() lets small local CSVs work too
+        # (for files with >= n + 250 texts the draw is unchanged).
+        base_texts = random.sample(texts, min(n_samples + 250, len(texts)))[:n_samples]
         samples = []
         for text in base_texts:
             augmented, injections = inject_pii_into_existing_text(text)
@@ -206,26 +208,51 @@ def _run_info(client, args, eval_set_path: Path) -> dict:
         "git_dirty": bool(_git("status", "--porcelain", "--", "src", "config")),
         "eval_set": str(eval_set_path),
         "eval_set_sha256": hashlib.sha256(eval_set_path.read_bytes()).hexdigest(),
-        "annotated_set": str(args.annotated),
+        "annotated_set": str(args.annotated) if args.annotated else None,
         "tokenizer": args.tokenizer,
         "limit": args.limit,
     }
 
 
-def run(args) -> None:
-    from transformers import AutoTokenizer
+def _annotated_metrics(originals, gts, extracted, tokenizer) -> tuple[dict, list[dict]]:
+    """Metrics 2 and 3 on the annotated notes, plus one example record per note."""
+    # Both de-identifications come from the same extraction: (a) the original experiments' protocol,
+    # every field redacted; (b) the current pipeline, dates kept, so residual is scored on non-date fields only.
+    anon_all = [remove_pii_from_text(t, p, skip_fields=()) for t, p in zip(originals, extracted)]
+    anon_pipeline = [remove_pii_from_text(t, p) for t, p in zip(originals, extracted)]
+    residual_all, hits_all = compute_residual(anon_all, gts, PII_FIELDS)
+    residual_pipeline, hits_pipeline = compute_residual(anon_pipeline, gts, REDACTED_FIELDS)
+    retention_all, tokens_all = compute_retention(originals, anon_all, gts, tokenizer)
+    retention_pipeline, tokens_pipeline = compute_retention(originals, anon_pipeline, gts, tokenizer)
+    metrics = {
+        "residual_pii": {"all_fields_redacted": residual_all, "pipeline_dates_kept": residual_pipeline},
+        "token_retention": {"all_fields_redacted": retention_all, "pipeline_dates_kept": retention_pipeline},
+    }
+    examples = [
+        {"text": t, "ground_truth": gt, "extracted_pii": p,
+         "deidentified_all_fields": a, "deidentified_pipeline": b,
+         "residual_hits_all_fields": ha, "residual_hits_pipeline": hb,
+         "tokens_all_fields": ta, "tokens_pipeline": tb}
+        for t, gt, p, a, b, ha, hb, ta, tb in zip(originals, gts, extracted, anon_all, anon_pipeline,
+                                                 hits_all, hits_pipeline, tokens_all, tokens_pipeline)
+    ]
+    return metrics, examples
 
+
+def run(args) -> None:
     config["BACKEND"] = "ollama"
     config["OLLAMA_CONFIG"].update({"MODEL": args.model, "HOST": args.host})
 
     eval_set_path = Path(args.eval_set)
     samples = json.loads(eval_set_path.read_text(encoding="utf-8"))["samples"][:args.limit]
-    annotated = json.loads(Path(args.annotated).read_text(encoding="utf-8"))
-    originals, gts = list(annotated)[:args.limit], list(annotated.values())[:args.limit]
+    # Without manual annotations (e.g. a site with raw notes only) only metric 1 can be computed.
+    originals, gts = [], []
+    if args.annotated:
+        annotated = json.loads(Path(args.annotated).read_text(encoding="utf-8"))
+        originals, gts = list(annotated)[:args.limit], list(annotated.values())[:args.limit]
 
     client = load_model(config["MODEL_PATH"])
     info = _run_info(client, args, eval_set_path)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     system_prompt = get_system_prompt()
 
     # Load the model before timing; an empty request only loads it. Loading a large GGUF over NFS can
@@ -235,42 +262,26 @@ def run(args) -> None:
     print(f"[1/2] Extracting PII from {len(samples)} injected notes with {args.model}...")
     extracted_inj, time_inj = _timed_extract([s["text"] for s in samples], client, system_prompt)
     print(f"[2/2] Extracting PII from {len(originals)} annotated notes...")
-    extracted_ann, time_ann = _timed_extract(originals, client, system_prompt)
+    extracted_ann, time_ann = _timed_extract(originals, client, system_prompt) if originals else ([], 0.0)
 
     recall, recall_details = compute_recall(samples, extracted_inj)
+    annotated_metrics, annotated_examples = {"residual_pii": None, "token_retention": None}, []
+    if originals:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+        annotated_metrics, annotated_examples = _annotated_metrics(originals, gts, extracted_ann, tokenizer)
 
-    # Both de-identifications come from the same extraction: (a) the original experiments' protocol,
-    # every field redacted; (b) the current pipeline, dates kept, so residual is scored on non-date fields only.
-    anon_all = [remove_pii_from_text(t, p, skip_fields=()) for t, p in zip(originals, extracted_ann)]
-    anon_pipeline = [remove_pii_from_text(t, p) for t, p in zip(originals, extracted_ann)]
-    residual_all, hits_all = compute_residual(anon_all, gts, PII_FIELDS)
-    residual_pipeline, hits_pipeline = compute_residual(anon_pipeline, gts, REDACTED_FIELDS)
-    retention_all, tokens_all = compute_retention(originals, anon_all, gts, tokenizer)
-    retention_pipeline, tokens_pipeline = compute_retention(originals, anon_pipeline, gts, tokenizer)
-
-    failures = sum("raw_response" in p for p in extracted_inj + extracted_ann)
     n_notes = len(samples) + len(originals)
     report = {
         "run_info": info,
         "metrics": {
             "synthetic_recall": recall,
-            "residual_pii": {"all_fields_redacted": residual_all, "pipeline_dates_kept": residual_pipeline},
-            "token_retention": {"all_fields_redacted": retention_all, "pipeline_dates_kept": retention_pipeline},
-            "json_failures": failures,
+            **annotated_metrics,
+            "json_failures": sum("raw_response" in p for p in extracted_inj + extracted_ann),
             "seconds_per_note": (time_inj + time_ann) / n_notes if n_notes else None,
             "seconds_total": time_inj + time_ann,
         },
-        "examples": {
-            "synthetic_recall": recall_details,
-            "annotated": [
-                {"text": t, "ground_truth": gt, "extracted_pii": p,
-                 "deidentified_all_fields": a, "deidentified_pipeline": b,
-                 "residual_hits_all_fields": ha, "residual_hits_pipeline": hb,
-                 "tokens_all_fields": ta, "tokens_pipeline": tb}
-                for t, gt, p, a, b, ha, hb, ta, tb in zip(originals, gts, extracted_ann, anon_all, anon_pipeline,
-                                                         hits_all, hits_pipeline, tokens_all, tokens_pipeline)
-            ],
-        },
+        "examples": {"synthetic_recall": recall_details, "annotated": annotated_examples},
     }
 
     output_dir = Path(args.output_dir)
@@ -310,15 +321,21 @@ def format_report(report: dict) -> str:
     ]
     lines += [f"     {c:24s} {_pct(v['recall'])}  ({v['detected']}/{v['total']})" for c, v in rec["per_category"].items()]
     lines += ["", "2. RESIDUAL PII RATE (lower is better)"]
-    for name, label in [("all_fields_redacted", "All fields redacted (original protocol)"),
-                        ("pipeline_dates_kept", "Pipeline, dates kept (non-date GT only)")]:
-        r = res[name]
-        lines.append(f"   {label}: {_pct(r['residual_rate'])}  ({r['residual_hits']}/{r['gt_pii']})")
-        lines += [f"     {c:24s} {v['hits']}/{v['gt']}" for c, v in r["per_category"].items()]
-    lines += ["", "3. TOKEN RETENTION RATIO (higher is better, 1.0 = all context kept)",
-              f"   All fields redacted:  {ret['all_fields_redacted']['mean_retention']:.4%}",
-              f"   Pipeline, dates kept: {ret['pipeline_dates_kept']['mean_retention']:.4%}",
-              "", f"JSON failures: {m['json_failures']}   Seconds per note: {m['seconds_per_note']:.2f}"
+    if res is None:
+        lines.append("   Not computed: no annotated set (needs manually labelled notes)")
+    else:
+        for name, label in [("all_fields_redacted", "All fields redacted (original protocol)"),
+                            ("pipeline_dates_kept", "Pipeline, dates kept (non-date GT only)")]:
+            r = res[name]
+            lines.append(f"   {label}: {_pct(r['residual_rate'])}  ({r['residual_hits']}/{r['gt_pii']})")
+            lines += [f"     {c:24s} {v['hits']}/{v['gt']}" for c, v in r["per_category"].items()]
+    lines += ["", "3. TOKEN RETENTION RATIO (higher is better, 1.0 = all context kept)"]
+    if ret is None:
+        lines.append("   Not computed: no annotated set (needs manually labelled notes)")
+    else:
+        lines += [f"   All fields redacted:  {ret['all_fields_redacted']['mean_retention']:.4%}",
+                  f"   Pipeline, dates kept: {ret['pipeline_dates_kept']['mean_retention']:.4%}"]
+    lines += ["", f"JSON failures: {m['json_failures']}   Seconds per note: {m['seconds_per_note']:.2f}"
               f"   Total: {m['seconds_total'] / 60:.1f} min"]
 
     lines += ["", "", "RECALL MISSES", "-" * 70]
@@ -364,13 +381,17 @@ def main():
     evaluate.add_argument("--host", default=config["OLLAMA_CONFIG"]["HOST"])
     evaluate.add_argument("--gguf", help="GGUF file the tag was created from (recorded in the report only)")
     evaluate.add_argument("--eval-set", default=str(DEFAULT_EVAL_SET))
-    evaluate.add_argument("--annotated", default=str(DEFAULT_ANNOTATED))
-    evaluate.add_argument("--tokenizer", default=DEFAULT_TOKENIZER, required=DEFAULT_TOKENIZER is None,
+    evaluate.add_argument("--annotated", default=str(DEFAULT_ANNOTATED) if DEFAULT_ANNOTATED.exists() else None,
+                          help="Manually annotated notes for metrics 2-3 (default: data/tagged_samples.json if "
+                               "present; without it only recall is computed)")
+    evaluate.add_argument("--tokenizer", default=DEFAULT_TOKENIZER,
                           help="Tokenizer folder for the retention metric (default: TOKENIZER_PATH in .env)")
     evaluate.add_argument("--limit", type=int, default=None, help="Use only the first N notes of each set (smoke test)")
     evaluate.add_argument("--output-dir", default=str(PROJECT_ROOT / "results"))
 
     args = parser.parse_args()
+    if args.command == "run" and args.annotated and not args.tokenizer:
+        parser.error("--tokenizer (or TOKENIZER_PATH in .env) is needed for the retention metric")
     if args.command == "build-eval-set":
         build_eval_set(Path(args.output), args.from_report, args.seed, args.n_synthetic)
     else:

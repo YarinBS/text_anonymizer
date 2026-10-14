@@ -86,14 +86,14 @@ The current pipeline intentionally retains dates in the text and preserves the o
 2. **Residual PII rate**: share of ground-truth PII left after de-identification of the 100 annotated notes (`data/tagged_samples.json`).
 3. **Token retention ratio**: context tokens kept on the same 100 notes (GT PII removed from both sides; one fixed tokenizer for all models).
 
-Residual and retention are given twice: with every field redacted (the original experiments) and with the pipeline's default (dates kept).
+Residual and retention are given twice: with every field redacted (the original experiments) and with the pipeline's default (dates kept). Without an annotated set (`--annotated` absent), only metric 1 is computed; build its eval set from local raw notes with `build-eval-set --n-synthetic <N>` (uses `DATA_PATH` and the first column in `COLUMNS_TO_DEIDENTIFY`).
 
 ```bash
 python src/evaluate.py build-eval-set --from-report results/evaluation_20260228_170735.json   # once
 python src/evaluate.py run --model <ollama tag> --host http://127.0.0.1:11434 [--limit 5]
 ```
 
-The reports contain real clinical notes: keep them on the secured server.
+The reports contain real clinical notes: keep them on the secured server. Step-by-step instructions for a Windows machine with Ollama: [EVALUATION.md](EVALUATION.md).
 
 ## Testing
 
