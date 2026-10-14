@@ -7,19 +7,20 @@ It also defines the schema for the extracted medical information using Pydantic 
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
-from vllm import LLM, SamplingParams
-from vllm.sampling_params import StructuredOutputsParams
-from vllm.entrypoints.chat_utils import ChatTemplateResolutionError
 
 from config import config
 from logger import get_logger
 
 
 logger = get_logger()
+
+# Dates are extracted but kept in the de-identified text on purpose (they are needed downstream).
+DATE_FIELDS = ("intervention_dates", "other_dates", "patient_date_of_birth")
 
 
 class MedicalInformation(BaseModel):
@@ -35,16 +36,27 @@ class MedicalInformation(BaseModel):
     locations: List[str] = Field(..., description='List of physical geographic locations mentioned in the text (e.g., street address, city, county, precinct, ZIP code), NOT including eye side (Left, Right, LE, RE, שמאל, ימין, etc.)', default_factory=list)
 
 
-def load_model(model_path: str) -> LLM:
+def load_model(model_path: str):
     """
-    Load a vLLM model from a specified path.
+    Load the model for the configured BACKEND.
 
     Parameters:
-    - model_path (str): The path to the model file.
+    - model_path (str): The path to the model file (vLLM only; Ollama models are named in OLLAMA_CONFIG).
 
     Returns:
-    - LLM: The loaded vLLM model instance.
+    - The loaded vLLM model instance, or an Ollama client for BACKEND "ollama".
     """
+
+    if config.get("BACKEND", "vllm") == "ollama":
+        # Ollama serves the model itself; we only need a client for its HTTP API.
+        import ollama
+        return ollama.Client(host=config["OLLAMA_CONFIG"]["HOST"])
+
+    if not model_path:
+        raise RuntimeError("MODEL_PATH must be set in the environment or .env")
+
+    # Imported here so that the Ollama backend works on machines without vLLM (e.g. Windows).
+    from vllm import LLM
 
     vllm_config = config["VLLM_CONFIG"]["MODEL_CONFIG"]
     model = LLM(
@@ -294,13 +306,65 @@ def get_system_prompt(response_schema: BaseModel = MedicalInformation) -> str:
     return system_prompt
 
 
-def extract_pii_from_text(texts: List[str], model: LLM, system_prompt: str) -> dict:
+def _build_conversation(system_prompt: str, text: str) -> list[dict]:
+    """Return the chat messages for one text; shared by both backends so they see the same prompt."""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Extract the PII from the following clinical text:\n{text}"},
+    ]
+
+
+def _parse_response(response: str) -> dict:
+    """Parse the model's JSON; keep the raw text when it is not valid JSON."""
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        print("Failed to parse JSON response. Raw response:")
+        print(response)
+        return {"raw_response": response}
+
+
+def _extract_pii_ollama(texts: List[str], client, system_prompt: str) -> list[dict]:
     """
-    Extract personally identifiable information (PII) from a list of clinical texts using a vLLM model.
+    Extract PII with an Ollama server, enforcing the same JSON schema as the vLLM path.
+
+    Requests are sent in parallel (NUM_PARALLEL) because Ollama handles one request per call;
+    `map` keeps the results in input order. Thinking is turned off so the reply is the JSON only.
+    """
+    import ollama
+
+    ollama_config = config["OLLAMA_CONFIG"]
+    # Every key is required (values may still be null/[]): otherwise Ollama's grammar lets a model close
+    # the JSON after the first key, which Llama-3.3 did in 493/500 notes, hiding all other PII.
+    schema = MedicalInformation.model_json_schema()
+    schema["required"] = list(schema["properties"])
+
+    def _extract_one(text: str) -> dict:
+        try:
+            response = client.chat(
+                model=ollama_config["MODEL"],
+                messages=_build_conversation(system_prompt, text),
+                format=schema,
+                options=ollama_config.get("OPTIONS", {}),
+                think=False,
+            )
+        except ollama.ResponseError as error:
+            # A failed request is treated like an unparsable answer, so one bad text does not stop the run.
+            logger.warning(f"Ollama request failed: {error}")
+            return {"raw_response": f"OLLAMA_ERROR: {error}"}
+        return _parse_response(response.message.content)
+
+    with ThreadPoolExecutor(max_workers=ollama_config.get("NUM_PARALLEL", 1)) as executor:
+        return list(executor.map(_extract_one, texts))
+
+
+def extract_pii_from_text(texts: List[str], model, system_prompt: str) -> dict:
+    """
+    Extract personally identifiable information (PII) from a list of clinical texts using the configured backend.
 
     Parameters:
     - texts (List[str]): A list of clinical text entries from which to extract PII.
-    - model (LLM): The loaded vLLM model instance to use for extraction.
+    - model: The loaded vLLM model instance, or an Ollama client (see load_model).
     - system_prompt (str): The system prompt string to be used as input for the model.
 
     Returns:
@@ -308,6 +372,13 @@ def extract_pii_from_text(texts: List[str], model: LLM, system_prompt: str) -> d
 
     Note: if extraction fails, the dictionary will contain a "raw_response" key with the raw model output.
     """
+
+    if config.get("BACKEND", "vllm") == "ollama":
+        return _extract_pii_ollama(texts, model, system_prompt)
+
+    from vllm import SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
+    from vllm.entrypoints.chat_utils import ChatTemplateResolutionError
 
     def _get_sampling_params() -> SamplingParams:
         """Build vLLM sampling parameters with JSON schema enforcement"""
@@ -323,18 +394,10 @@ def extract_pii_from_text(texts: List[str], model: LLM, system_prompt: str) -> d
             structured_outputs=structured_outputs,
         )
 
-    results = []
-
     sampling_params = _get_sampling_params()
     try:
         # Build all conversations upfront
-        conversations = [
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract the PII from the following clinical text:\n{text}"},
-            ]
-            for text in texts
-        ]
+        conversations = [_build_conversation(system_prompt, text) for text in texts]
 
         outputs = model.chat(
             messages=conversations,
@@ -349,26 +412,18 @@ def extract_pii_from_text(texts: List[str], model: LLM, system_prompt: str) -> d
             sampling_params=sampling_params
         )
 
-    results = []
-    for output in outputs:
-        response = output.outputs[0].text
-        try:
-            results.append(json.loads(response))
-        except json.JSONDecodeError:
-            print("Failed to parse JSON response. Raw response:")
-            print(response)
-            results.append({"raw_response": response})
-
-    return results
+    return [_parse_response(output.outputs[0].text) for output in outputs]
 
 
-def remove_pii_from_text(text: str, extracted_pii: dict) -> str:
+def remove_pii_from_text(text: str, extracted_pii: dict, skip_fields=DATE_FIELDS) -> str:
     """
     Remove personally identifiable information (PII) from a clinical text based on the extracted PII.
 
     Parameters:
     - text (str): The original clinical text from which to remove PII.
     - extracted_pii (dict): A dictionary containing the extracted PII, following the schema defined in the MedicalInformation class.
+    - skip_fields: Fields that are left in the text. The default keeps dates; the evaluation passes ()
+      to also redact them, as in the original experiments.
 
     Returns:
     - str: The clinical text with PII replaced by placeholders (e.g., [REDACTED_PATIENT_NAME], [REDACTED_PATIENT_ID], etc.).
@@ -382,7 +437,7 @@ def remove_pii_from_text(text: str, extracted_pii: dict) -> str:
 
     deidentified_text = text
     for key, value in extracted_pii.items():
-        if key in ["intervention_dates", "other_dates", "patient_date_of_birth"]:  # Skip fields that are not relevant for de-identification
+        if key in skip_fields:
             continue
         if isinstance(value, list):
             for item in value:

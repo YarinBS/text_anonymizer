@@ -2,6 +2,21 @@ DATA_PATH: data/only_injections_freetext.csv
 COLUMNS_TO_DEIDENTIFY: ["summary_and_discussion"]
 MODEL_PATH: ${MODEL_PATH}
 
+# Inference backend: "vllm" (Linux servers, MODEL_PATH) or "ollama" (e.g. the Windows hospital machine, OLLAMA_CONFIG)
+BACKEND: vllm
+
+OLLAMA_CONFIG:
+  HOST: http://127.0.0.1:11434   # Ollama's default address
+  MODEL: gemma4-26b-a4b-q3       # Ollama model tag (from `ollama create`); backup: gemma4-12b-q8
+  NUM_PARALLEL: 1                # Parallel requests; match the server's OLLAMA_NUM_PARALLEL. Each slot adds KV cache:
+                                 # on a 16 GB GPU (hospital RTX A4000) only 1 fits for Gemma 4 12B (13.4 GiB measured; 4 slots: 15.6 GiB)
+  OPTIONS: {
+    "num_ctx": 8192,       # Prompt is ~3k tokens + note (max ~0.7k) + JSON; Ollama silently cuts longer prompts
+    "num_predict": 1024,   # Same as VLLM max_tokens
+    "temperature": 0,
+    "seed": 0,
+  }
+
 LLAMA_CPP_CONFIG:
   MODEL_CONFIG: {
     "n_ctx": 4096,

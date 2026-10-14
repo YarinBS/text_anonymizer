@@ -24,10 +24,9 @@ def get_config():
     data_path = Path(os.path.expandvars(config["DATA_PATH"]))
     config["DATA_PATH"] = str(data_path if data_path.is_absolute() else PROJECT_ROOT / data_path)
 
+    # Only vLLM needs MODEL_PATH (checked in utils.load_model); Ollama names its model in OLLAMA_CONFIG.
     model_path = os.path.expandvars(config.get("MODEL_PATH", ""))
-    if not model_path or model_path == "${MODEL_PATH}":
-        raise RuntimeError("MODEL_PATH must be set in the environment or .env")
-    config["MODEL_PATH"] = model_path
+    config["MODEL_PATH"] = "" if model_path == "${MODEL_PATH}" else model_path
 
     return config
 

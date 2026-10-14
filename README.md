@@ -48,6 +48,10 @@ Edit `config/config.yaml` to set:
 
 The configuration file uses a repository-relative default data path. Replace it with the path to data that you are authorized to process.
 
+### Ollama backend (e.g. Windows)
+
+vLLM runs only on Linux. To run the pipeline with a local Ollama server, set `BACKEND: ollama` and the model tag in `OLLAMA_CONFIG` (`MODEL_PATH` is then not needed). vLLM is imported only by the vLLM backend, so on Windows install everything in `requirements.txt` except `vllm`. Keep `num_ctx` at 8192 or more: Ollama silently cuts longer prompts, and the prompt alone is about 3,000 tokens.
+
 ## Usage
 
 Run the pipeline from any directory:
@@ -73,6 +77,23 @@ Fields containing embedded newlines are preserved correctly in CSV output. If th
 Only process data you are authorized to use. Do not commit input data, generated outputs, environment files, model credentials, or local model paths. These are excluded by `.gitignore` where appropriate.
 
 The current pipeline intentionally retains dates in the text and preserves the original input columns in the output CSV. Review and remove sensitive original data before sharing results.
+
+## Evaluating a model
+
+`src/evaluate.py` scores one Ollama model with three metrics and writes `results/eval_<model>_<time>.json` and `.txt`, with every example used:
+
+1. **Synthetic PII injection recall**: 500 real notes with injected PII of known value (frozen set in `data/eval_sets/`, so every model gets the same inputs).
+2. **Residual PII rate**: share of ground-truth PII left after de-identification of the 100 annotated notes (`data/tagged_samples.json`).
+3. **Token retention ratio**: context tokens kept on the same 100 notes (GT PII removed from both sides; one fixed tokenizer for all models).
+
+Residual and retention are given twice: with every field redacted (the original experiments) and with the pipeline's default (dates kept).
+
+```bash
+python src/evaluate.py build-eval-set --from-report results/evaluation_20260228_170735.json   # once
+python src/evaluate.py run --model <ollama tag> --host http://127.0.0.1:11434 [--limit 5]
+```
+
+The reports contain real clinical notes: keep them on the secured server.
 
 ## Testing
 
