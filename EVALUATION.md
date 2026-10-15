@@ -2,7 +2,7 @@
 
 This test measures how well a model finds personal details (PII) in clinical notes. It takes real notes, adds **fake** PII with known values (name, ID, age, doctor, dates, city), runs the anonymizer, and counts how many of the fake values the model found (**recall**). No labelled data is needed.
 
-Tested setup: Ollama 0.33.2, Python 3.12, on an RTX A4000 16 GB (Windows) and an H200 (Linux). Commands are given for both systems; run them from the repository folder.
+Tested setup: Ollama 0.33.2 and 0.40.3, Python 3.12, on an RTX A4000 16 GB (Windows) and an H200 (Linux). Commands are given for both systems; run them from the repository folder.
 
 ## 1. One-time setup
 
@@ -38,7 +38,7 @@ On Linux you can download with `curl -L -O <link>`. Then check each file; the re
 
 ### Ollama
 
-Use Ollama 0.33.2 (older versions do not support Gemma 4). Ollama must run with **`OLLAMA_NUM_PARALLEL=1`**: with more parallel requests the model does not fit in 16 GB of GPU memory.
+Use Ollama 0.33.2 or 0.40.3 (both give the same scores; older versions do not support Gemma 4). Ollama must run with **`OLLAMA_NUM_PARALLEL=1`**: with more parallel requests the model does not fit in 16 GB of GPU memory.
 
 | Windows | Linux |
 |---|---|
@@ -86,7 +86,8 @@ For the full evaluation, use `local_n500.json` instead. Run the subset first: it
 
 **While it runs**, open a second terminal:
 
-- `ollama ps`: the PROCESSOR column must show **100% GPU**. If it shows any CPU share, the model does not fit. It still works, but much more slowly; please report it.
+- `ollama ps`: the PROCESSOR column must show **100% GPU** and CONTEXT must show **8192**. If PROCESSOR shows any CPU share, the model does not fit. It still works, but much more slowly; please report it.
+- A manual test with `ollama run` shows a context of 4096 and a "Thinking" step. This is expected: the evaluation sets the context to 8192 and turns thinking off in every request. With thinking on, Gemma 4 spends all its output tokens on thinking and returns no answer.
 - `nvidia-smi`: note the memory used.
 
 ## 4. Results

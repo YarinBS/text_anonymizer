@@ -257,7 +257,8 @@ def run(args) -> None:
 
     # Load the model before timing; an empty request only loads it. Loading a large GGUF over NFS can
     # also exceed Ollama's load timeout, which would turn the first requests into failures.
-    client.generate(model=args.model, prompt="")
+    # Same options as the real requests: a different num_ctx makes Ollama reload the model on the first one.
+    client.generate(model=args.model, prompt="", options=config["OLLAMA_CONFIG"].get("OPTIONS", {}))
 
     print(f"[1/2] Extracting PII from {len(samples)} injected notes with {args.model}...")
     extracted_inj, time_inj = _timed_extract([s["text"] for s in samples], client, system_prompt)
