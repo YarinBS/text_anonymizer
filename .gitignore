@@ -226,7 +226,10 @@ TODO.md
 # Project-specific sensitive data and generated outputs
 logs/
 data/
+docs/
 notebooks/
 src/legacy/
 *_deidentified_final.csv
+*_extractions.jsonl
+*_shareable.csv
 *_deidentified.txt

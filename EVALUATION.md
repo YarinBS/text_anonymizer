@@ -56,13 +56,9 @@ ollama create gemma4-12b-q8 -f Modelfile
 
 ### Config
 
-In `config/config.yaml`:
+Fill in `config/rambam.yaml` as described in the README ("Running on the Rambam data"): every `FILL_ME` value. The evaluation uses its `DATA_PATH`, the first name in `COLUMNS_TO_DEIDENTIFY` (the text column), and its privacy switches. It already sets `BACKEND: ollama`.
 
-- `BACKEND: ollama`
-- `DATA_PATH`: the CSV with the notes
-- `COLUMNS_TO_DEIDENTIFY`: the first name must be the text column
-
-Leave `OLLAMA_CONFIG` as it is (`num_ctx: 8192`, `NUM_PARALLEL: 1`). If Ollama does not run at its default address (`http://127.0.0.1:11434`), add `--host <address>` to the `run` commands below.
+Leave `OLLAMA_CONFIG` in `config/config.yaml` as it is (`num_ctx: 8192`, `NUM_PARALLEL: 1`). If Ollama does not run at its default address (`http://127.0.0.1:11434`), add `--host <address>` to the `run` commands below.
 
 ## 2. Build the test set (once)
 
@@ -70,16 +66,16 @@ This picks random notes and adds the fake PII. It takes seconds and does not use
 
 | | Command |
 |---|---|
-| **Subset** (quick check, 50 notes) | `python src/evaluate.py build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json` |
-| **Full** (500 notes, same size as the lab's evaluation) | `python src/evaluate.py build-eval-set --n-synthetic 500 --output data/eval_sets/local_n500.json` |
+| **Subset** (quick check, 50 notes) | `python src/evaluate.py --config config/rambam.yaml build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json` |
+| **Full** (500 notes, same size as the lab's evaluation) | `python src/evaluate.py --config config/rambam.yaml build-eval-set --n-synthetic 500 --output data/eval_sets/local_n500.json` |
 
 The same seed (42) gives the same set every time. Run both models on the **same** file, so their scores can be compared.
 
 ## 3. Run the evaluation, once per model
 
 ```
-python src/evaluate.py run --model gemma4-26b-a4b-q3 --eval-set data/eval_sets/local_n50.json
-python src/evaluate.py run --model gemma4-12b-q8 --eval-set data/eval_sets/local_n50.json
+python src/evaluate.py --config config/rambam.yaml run --model gemma4-26b-a4b-q3 --eval-set data/eval_sets/local_n50.json
+python src/evaluate.py --config config/rambam.yaml run --model gemma4-12b-q8 --eval-set data/eval_sets/local_n50.json
 ```
 
 For the full evaluation, use `local_n500.json` instead. Run the subset first: it shows the time per note, so you can estimate the full run (500 × seconds per note). For a run that takes hours on Linux, start it inside `tmux` or with `nohup`, so it does not stop when the terminal closes.
@@ -97,6 +93,7 @@ Each run prints a summary and saves a full report in `results/eval_<model>_<time
 - **Section 1** gives the recall, overall and per type of PII. Higher is better.
 - **Sections 2 and 3** say "Not computed". This is expected: they need manually labelled notes.
 - **Last line**: JSON failures (should be 0), seconds per note, total time.
+- A JSON failure, a cut answer, or a note too long for `num_ctx` is a failed note. In the pipeline it becomes `[ANONYMIZATION_ERROR]` with no text kept, so it loses the whole note.
 
 **Please send back**, for each model: the printed summary (from `ANONYMIZATION EVALUATION REPORT` to the `JSON failures` line, numbers only), the `ollama ps` line, the `nvidia-smi` memory value, and any error message.
 
@@ -106,4 +103,4 @@ The files in `data/eval_sets/` and `results/` contain real notes (with fake PII 
 
 ## With labelled notes (optional)
 
-If a file of manually labelled notes is available (format: `{"note text": {"patient_name": ..., "intervention_dates": [...], ...}}`, as in `data/tagged_samples.json`), add `--annotated <file> --tokenizer <folder>` to the run command. This also computes the residual PII rate and the token retention ratio. The tokenizer folder must hold `tokenizer.json`, `tokenizer_config.json` and `special_tokens_map.json` from [unsloth/Llama-3.3-70B-Instruct](https://huggingface.co/unsloth/Llama-3.3-70B-Instruct/tree/main) (the same tokenizer for every model, so the ratios are comparable).
+If a file of manually labelled notes is available (format: `{"note text": {"patient_name": ..., "intervention_dates": [...], ...}}`, as in `data/tagged_samples.json`), add `--annotated <file> --tokenizer <folder>` to the run command. This also computes the residual PII rate and the token retention ratio. A failed note counts all its PII as residual. The age counts only as a whole number ("VA 0.71" is not a leaked age 71), so age residuals from reports before 2026-11-04 are not comparable. The tokenizer folder must hold `tokenizer.json`, `tokenizer_config.json` and `special_tokens_map.json` from [unsloth/Llama-3.3-70B-Instruct](https://huggingface.co/unsloth/Llama-3.3-70B-Instruct/tree/main) (the same tokenizer for every model, so the ratios are comparable).
