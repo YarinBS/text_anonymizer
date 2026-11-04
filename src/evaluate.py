@@ -35,8 +35,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from config import PROJECT_ROOT, config
+from config import PROJECT_ROOT, config, load_config
 from eval_injection import InjectedPII, _check_detection, inject_pii_into_existing_text
+from redaction import PLACEHOLDER, age_pattern
 from utils import (DATE_FIELDS, MedicalInformation, extract_pii_from_text,
                    get_system_prompt, load_model, remove_pii_from_text)
 
@@ -136,15 +137,24 @@ def _gt_values(gt: dict, fields) -> list[tuple[str, str]]:
 
 
 def compute_residual(anonymized: list[str], gts: list[dict], fields) -> tuple[dict, list[list[dict]]]:
-    """Metric 2: a ground-truth value that still appears in the de-identified text is a residual hit."""
+    """
+    Metric 2: a ground-truth value that still appears in the de-identified text is a residual hit.
+
+    A failed row is now written as "[ANONYMIZATION_ERROR]" with no text. It still counts all its PII
+    as residual (as when the original text followed the marker), so a model that fails more often does
+    not score better, and scores stay comparable with earlier reports. The age counts only as a whole
+    number, the same rule the pipeline uses ("VA 0.71" is not a leaked age 71).
+    """
     counts = {f: 0 for f in fields}
     hits = {f: 0 for f in fields}
     per_sample = []
     for text, gt in zip(anonymized, gts):
         sample_hits = []
+        failed = text.startswith("[ANONYMIZATION_ERROR]")
         for field, value in _gt_values(gt, fields):
             counts[field] += 1
-            if value in text:
+            present = age_pattern(value).search(text) if field == "patient_age" else value in text
+            if failed or present:
                 hits[field] += 1
                 sample_hits.append({"category": field, "value": value})
         per_sample.append(sample_hits)
@@ -172,7 +182,9 @@ def compute_retention(originals: list[str], anonymized: list[str], gts: list[dic
     per_sample = []
     for original, anon, gt in zip(originals, anonymized, gts):
         orig_tokens = _count(_strip_gt(original, gt))
-        anon_tokens = _count(_strip_gt(re.sub(r"\[REDACTED_[A-Z_]+\]", "", anon), gt))
+        # Every pipeline marker is removed ([REDACTED_*], [DATE_*], [ANONYMIZATION_ERROR]), so a failed row
+        # keeps 0 tokens and a date offset does not count as kept clinical context.
+        anon_tokens = _count(_strip_gt(PLACEHOLDER.sub("", anon), gt))
         ratio = min(anon_tokens / orig_tokens, 1.0) if orig_tokens else 1.0
         per_sample.append({"orig_tokens": orig_tokens, "anon_tokens": anon_tokens, "retention": ratio})
     mean = sum(s["retention"] for s in per_sample) / len(per_sample) if per_sample else None
@@ -211,6 +223,8 @@ def _run_info(client, args, eval_set_path: Path) -> dict:
         "annotated_set": str(args.annotated) if args.annotated else None,
         "tokenizer": args.tokenizer,
         "limit": args.limit,
+        "config": args.config or "config/config.yaml",
+        "switches": {k: config.get(k) for k in ("NAME_LISTS", "SAFE_TEXT_MATCHING", "REGEX_BACKSTOP", "DATE_MODE")},
     }
 
 
@@ -369,6 +383,9 @@ def format_report(report: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate an LLM on the anonymization pipeline")
+    parser.add_argument("--config", default=None,
+                        help="Config file (before the command), e.g. config/rambam.yaml: its DATA_PATH feeds build-eval-set, "
+                             "its switches are scored by run. Models are comparable only when scored with the same config.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build-eval-set", help="Freeze the injected samples to a file")
@@ -393,6 +410,8 @@ def main():
     args = parser.parse_args()
     if args.command == "run" and args.annotated and not args.tokenizer:
         parser.error("--tokenizer (or TOKENIZER_PATH in .env) is needed for the retention metric")
+    if args.config:
+        load_config(args.config)
     if args.command == "build-eval-set":
         build_eval_set(Path(args.output), args.from_report, args.seed, args.n_synthetic)
     else:
