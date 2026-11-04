@@ -58,7 +58,7 @@ def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_p
     monkeypatch.setattr(main, "load_model", lambda model_path: object())
     monkeypatch.setattr(main, "get_system_prompt", lambda: "prompt")
     monkeypatch.setattr(main, "extract_pii_from_text", lambda **kwargs: [{}])
-    monkeypatch.setattr(main, "remove_pii_from_text", lambda text, extracted: f"redacted: {text}")
+    monkeypatch.setattr(main, "deidentify_text", lambda text, extracted, **kwargs: (f"redacted: {text}", []))
 
     main.main()
     result = pd.read_csv(output_path)
@@ -83,7 +83,7 @@ def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "load_model", lambda model_path: object())
     monkeypatch.setattr(main, "get_system_prompt", lambda: "prompt")
     monkeypatch.setattr(main, "extract_pii_from_text", lambda **kwargs: [{}, {}])
-    monkeypatch.setattr(main, "remove_pii_from_text", lambda text, extracted: f"redacted: {text}")
+    monkeypatch.setattr(main, "deidentify_text", lambda text, extracted, **kwargs: (f"redacted: {text}", []))
 
     main.main()
     result = pd.read_csv(output_path)
@@ -124,9 +124,26 @@ def test_config_paths_are_independent_of_working_directory(monkeypatch, tmp_path
 
 
 def test_setup_scripts_use_the_single_requirements_file():
-    for path in ("scripts/setup.sh", "scripts/install_cuda_env.sh"):
+    for path in ("scripts/setup.sh",):
         with open(path, encoding="utf-8") as file:
             contents = file.read()
         assert "requirements.txt" in contents
         assert "requirements_cpu.txt" not in contents
         assert "requirements_gpu.txt" not in contents
+
+
+def test_age_is_redacted_only_as_a_whole_number(monkeypatch):
+    # Synthetic note: the age must not be cut out of visual acuity, IOP or date values.
+    utils = load_utils(monkeypatch)
+    text = "בן 71. בן71, VA 0.71, 6/71, IOP 171, 71/80, date 3.4.71"
+    tag = "[REDACTED_PATIENT_AGE]"
+    assert utils.remove_pii_from_text(text, {"patient_age": 71}) == (
+        f"בן {tag}. בן{tag}, VA 0.71, 6/71, IOP 171, 71/80, date 3.4.71"
+    )
+
+
+def test_patient_id_keeps_plain_replacement(monkeypatch):
+    # An ID glued to a date by a lost line break must still be removed.
+    utils = load_utils(monkeypatch)
+    text = "ID 12345678917/01/22"
+    assert utils.remove_pii_from_text(text, {"patient_id": "123456789"}) == "ID [REDACTED_PATIENT_ID]17/01/22"

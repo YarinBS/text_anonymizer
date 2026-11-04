@@ -2,6 +2,15 @@ DATA_PATH: data/only_injections_freetext.csv
 COLUMNS_TO_DEIDENTIFY: ["summary_and_discussion"]
 MODEL_PATH: ${MODEL_PATH}
 
+# Opt-in privacy switches (all off here, so HY runs keep the original output format; all on in config/rambam.yaml).
+NAME_LISTS: false          # patient_name / doctor_name return every form (lists) instead of one string
+SAFE_TEXT_MATCHING: false  # longest value first, never inside placeholders, short names only as whole words
+REGEX_BACKSTOP: false      # phones, emails, URLs, Israeli IDs (check digit), "בן/בת/גיל NN" after the LLM
+DATE_MODE: keep            # keep = dates stay in the text; visit_offset = [DATE_DAY_n] from VISIT_DATE_COLUMN
+FLAGS_COLUMN: false        # add <column>_deid_flags (unmatched fields, backstop hits, date problems; no values)
+SAVE_EXTRACTIONS: false    # write <input>_extractions.jsonl (contains PII; internal), for --reuse-extractions
+SHARE_COLUMNS: []          # non-empty = also write <input>_shareable.csv with only these columns
+
 # Inference backend: "vllm" (Linux servers, MODEL_PATH) or "ollama" (e.g. the Windows hospital machine, OLLAMA_CONFIG)
 BACKEND: vllm
 
