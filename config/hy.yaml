@@ -1,0 +1,21 @@
+# Overrides of config/config.yaml for the HY data: every privacy switch on, but dates are KEPT in the text
+# (DATE_MODE: keep).
+# Run per input file: python src/main.py --config config/hy.yaml --data-path <csv>, after setting COLUMNS_TO_DEIDENTIFY:
+#   clinics_and_departments: present_illness, chief_complaint, description_text, answer_text (below)
+#   injections_merged: use config/hy_injections.yaml
+COLUMNS_TO_DEIDENTIFY: ["present_illness", "chief_complaint", "description_text", "answer_text"]
+
+NAME_LISTS: true
+SAFE_TEXT_MATCHING: true
+REGEX_BACKSTOP: true
+DATE_MODE: keep
+FLAGS_COLUMN: true
+SAVE_EXTRACTIONS: true
+SHARE_COLUMNS: []
+
+# Gemma-4-12B (Q8) on a parallel Ollama server.
+BACKEND: ollama
+OLLAMA_CONFIG:
+  HOST: http://127.0.0.1:11502
+  MODEL: gemma4-12b-q8
+  NUM_PARALLEL: 16

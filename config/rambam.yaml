@@ -1,0 +1,24 @@
+# Overrides of config/config.yaml for the Rambam data: every privacy switch on.
+# BEFORE RUNNING: replace every FILL_ME below (README, "Running on the Rambam data"). The run stops at once
+# while a FILL_ME is left or a column is not in the file.
+# Run: python src/main.py --config config/rambam.yaml
+DATA_PATH: FILL_ME                 # the notes CSV, e.g. data/rambam_notes.csv
+COLUMNS_TO_DEIDENTIFY: [FILL_ME]   # the free-text column(s), e.g. ["note_text"]
+
+NAME_LISTS: true
+SAFE_TEXT_MATCHING: true
+REGEX_BACKSTOP: true
+DATE_MODE: visit_offset
+VISIT_DATE_COLUMN: FILL_ME        # real visit date of each row; text dates become days from it; this column stays real
+VISIT_DATE_FORMAT: null           # e.g. "%d/%m/%Y"; null = day first (ISO also read)
+BIRTHDATE_COLUMN: FILL_ME         # becomes age_at_visit (top-coded at 90) in the shareable file; write null if there is none
+BIRTHDATE_FORMAT: null
+AGE_COLUMNS: []                   # structured age columns, top-coded at 90 in the shareable file
+FLAGS_COLUMN: true
+SAVE_EXTRACTIONS: true
+# Only these columns go into <input>_shareable.csv: the patient ID column, the visit-date column, and for each
+# text column <column>_deidentified and <column>_deid_flags. Raw text and birthdate columns are refused.
+SHARE_COLUMNS: [FILL_ME]
+
+# Hospital machine: Ollama with Gemma-4-26B-A4B (Q3), see OLLAMA_CONFIG in config/config.yaml.
+BACKEND: ollama
