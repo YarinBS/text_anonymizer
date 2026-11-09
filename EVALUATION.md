@@ -56,7 +56,7 @@ ollama create gemma4-12b-q8 -f Modelfile
 
 ### Config
 
-Fill in `config/rambam.yaml` as described in the README ("Running on the Rambam data"): every `FILL_ME` value. The evaluation uses its `DATA_PATH`, the first name in `COLUMNS_TO_DEIDENTIFY` (the text column), and its privacy switches. It already sets `BACKEND: ollama`.
+Check that `config/config.yaml` says `HOSPITAL_CONFIG: rambam`. Fill in `config/rambam.yaml` as described in the README ("Running on the Rambam data"): every `FILL_ME` value. The evaluation uses its `DATA_PATH`, the first name in `COLUMNS_TO_DEIDENTIFY` (the text column), and its privacy switches. It already sets `BACKEND: ollama`.
 
 Leave `OLLAMA_CONFIG` in `config/rambam.yaml` as it is (`num_ctx: 8192`, `NUM_PARALLEL: 1`). If Ollama does not run at its default address (`http://127.0.0.1:11434`), add `--host <address>` to the `run` commands below.
 
@@ -66,16 +66,16 @@ This picks random notes and adds the fake PII. It takes seconds and does not use
 
 | | Command |
 |---|---|
-| **Subset** (quick check, 50 notes) | `python src/evaluate.py --config config/rambam.yaml build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json` |
-| **Full** (500 notes, same size as the lab's evaluation) | `python src/evaluate.py --config config/rambam.yaml build-eval-set --n-synthetic 500 --output data/eval_sets/local_n500.json` |
+| **Subset** (quick check, 50 notes) | `python src/evaluate.py build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json` |
+| **Full** (500 notes, same size as the lab's evaluation) | `python src/evaluate.py build-eval-set --n-synthetic 500 --output data/eval_sets/local_n500.json` |
 
 The same seed (42) gives the same set every time. Run both models on the **same** file, so their scores can be compared.
 
 ## 3. Run the evaluation, once per model
 
 ```
-python src/evaluate.py --config config/rambam.yaml run --model gemma4-26b-a4b-q3 --eval-set data/eval_sets/local_n50.json
-python src/evaluate.py --config config/rambam.yaml run --model gemma4-12b-q8 --eval-set data/eval_sets/local_n50.json
+python src/evaluate.py run --model gemma4-26b-a4b-q3 --eval-set data/eval_sets/local_n50.json
+python src/evaluate.py run --model gemma4-12b-q8 --eval-set data/eval_sets/local_n50.json
 ```
 
 For the full evaluation, use `local_n500.json` instead. Run the subset first: it shows the time per note, so you can estimate the full run (500 × seconds per note). For a run that takes hours on Linux, start it inside `tmux` or with `nohup`, so it does not stop when the terminal closes.

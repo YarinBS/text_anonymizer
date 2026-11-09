@@ -14,6 +14,7 @@ What is removed, what is kept and what risks remain, for reviewers of the output
 | `src/date_shift.py` | dates in the text → offsets from the visit date |
 | `src/evaluate.py`, `src/eval_injection.py` | model evaluation (below) |
 | `scripts/audit_output.py` | counts possible PII left in an output file (counts only, never text) |
+| `config/config.yaml` | settings shared by every hospital (model, vLLM/llama.cpp) and `HOSPITAL_CONFIG`, which picks the hospital file |
 | `config/rambam.yaml` | config for the Rambam data (every switch on) |
 | `config/hy_injections.yaml` | config for the HY injection notes (every switch on, dates kept) |
 | `tests/` | unit tests, synthetic text only |
@@ -47,7 +48,7 @@ Every placeholder, and the date rules: [DEIDENTIFICATION.md](DEIDENTIFICATION.md
 
 ### Privacy switches
 
-Every config file is complete on its own (data, switches, backend settings); a run reads only the file given with `--config`. A switch left out counts as off, which keeps the original output format: dates stay in the text, and names are replaced by plain string matching.
+A run reads `config/config.yaml`, then the hospital file it names in `HOSPITAL_CONFIG` (`rambam`, `hy` or `hy_injections`). The hospital file holds the data, columns, switches and backend (`BACKEND`, `OLLAMA_CONFIG`); `config.yaml` holds the rest. A key may be in only one of the two files, otherwise the run stops: a switch turned on in `config.yaml` could not be silently undone by a hospital file. A switch left out counts as off, which keeps the original output format: dates stay in the text, and names are replaced by plain string matching.
 - `config/rambam.yaml`: every switch on;
 - `config/hy_injections.yaml`: every switch on except `DATE_MODE: keep`.
 
@@ -99,12 +100,10 @@ In the config file (start from one of the two in `config/`):
 ## Usage
 
 ```bash
-python src/main.py --config config/rambam.yaml       # all privacy switches on (--config is required)
-python src/main.py --config <cfg> --data-path <file.csv>             # same config, another input file
-python src/main.py --config <cfg> --reuse-extractions <input>_extractions.jsonl   # re-apply replacement, no model
+python src/main.py   # settings: HOSPITAL_CONFIG in config/config.yaml, then DATA_PATH etc. in that hospital file
 ```
 
-`--reuse-extractions` uses the saved model answers. A row whose text changed since then (different hash) counts as failed, so a reordered file cannot pair a note with another note's answer. With it, a change to the replacement rules needs no model run.
+To re-apply replacement without the model, set `REUSE_EXTRACTIONS: <input>_extractions.jsonl` in the hospital file (set it back to `null` afterwards; the run logs it at the start). It uses the saved model answers. A row whose text changed since then (different hash) counts as failed, so a reordered file cannot pair a note with another note's answer. With it, a change to the replacement rules needs no model run.
 
 ### Running on the Rambam data
 
@@ -120,7 +119,7 @@ python src/main.py --config <cfg> --reuse-extractions <input>_extractions.jsonl 
    | `SHARE_COLUMNS` | the columns of the file that leaves the hospital: the patient ID column, the visit-date column, and `<text column>_deidentified` and `<text column>_deid_flags` for each text column |
 
    The run stops before loading the model if a `FILL_ME` is left, or if a column is not in the file.
-3. Run `python src/main.py --config config/rambam.yaml`.
+3. Check that `config/config.yaml` says `HOSPITAL_CONFIG: rambam`, then run `python src/main.py`.
 4. Check the output: `python scripts/audit_output.py <input>_shareable.csv`. Send only `<input>_shareable.csv` and the audit's printed counts. `<input>_deidentified_final.csv` and `<input>_extractions.jsonl` hold the original text and the PII: keep them on the hospital machine.
 
 ### Outputs (written next to the input)
@@ -138,7 +137,7 @@ For TXT input, each non-empty line is one record. If the model returns a differe
 
 ### Model quality: `src/evaluate.py` (Ollama backend)
 
-`src/evaluate.py` scores one Ollama model. It writes `results/eval_<model>_<time>.json` and `.txt`, with every example used. It scores the switches of the `--config` file; compare models only when they were scored with the same config.
+`src/evaluate.py` scores one Ollama model. It writes `results/eval_<model>_<time>.json` and `.txt`, with every example used. It scores the switches of the hospital file named in `HOSPITAL_CONFIG`; compare models only when they were scored with the same hospital config.
 
 1. **Synthetic PII injection recall.** Real notes get injected PII of known value (`eval_injection.py`). The frozen set is in `data/eval_sets/`, so every model gets the same inputs. Recall = injected values the model returned / injected values, per category.
 2. **Residual PII rate**, on the 100 annotated notes (`data/tagged_samples.json`): the share of ground-truth PII values still in the de-identified text.
@@ -150,8 +149,8 @@ Metrics 2 and 3 are given twice: with every field redacted (the original experim
 
 ```bash
 python src/evaluate.py build-eval-set --from-report results/evaluation_20260228_170735.json   # once
-python src/evaluate.py --config <cfg> build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json  # from the config's DATA_PATH notes
-python src/evaluate.py --config <cfg> run --model <ollama tag> --host http://127.0.0.1:11434 [--eval-set <file>] [--limit 5]
+python src/evaluate.py build-eval-set --n-synthetic 50 --output data/eval_sets/local_n50.json  # from the config's DATA_PATH notes
+python src/evaluate.py run --model <ollama tag> --host http://127.0.0.1:11434 [--eval-set <file>] [--limit 5]
 ```
 
 The reports contain real clinical notes: keep them on the secured server.

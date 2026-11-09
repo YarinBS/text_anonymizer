@@ -232,7 +232,6 @@ src/legacy/
 *_deidentified_final.csv
 *_extractions.jsonl
 *_shareable.csv
-# Local configs (not in the repository): the default config and the HY clinics config
-config/config.yaml
+# Local config (not in the repository): the HY clinics config
 config/hy.yaml
 *_deidentified.txt

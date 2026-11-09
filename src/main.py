@@ -9,14 +9,12 @@ Entry point of the de-identification pipeline. For every configured text column 
 
 Helpers live in utils.py; this file holds only the pipeline flow. See README.md for the switches.
 
-Usage: python src/main.py [--config config/rambam.yaml] [--data-path <file>] [--reuse-extractions <file>.jsonl]
+Usage: python src/main.py   (settings: config/config.yaml and the hospital file it names in HOSPITAL_CONFIG)
 """
 
-import argparse
 from pathlib import Path
 
-import config as config_module
-from config import config
+from config import config, load_config
 from logger import get_logger
 from utils import (date_column,
                    deidentify_text,
@@ -36,32 +34,20 @@ from utils import (date_column,
 logger = get_logger()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="De-identify clinical free text with a local LLM.")
-    parser.add_argument("--config", default=None, help="config file, e.g. config/rambam.yaml (required unless a local config/config.yaml exists)")
-    parser.add_argument("--data-path", default=None, help="input file; overrides DATA_PATH of the config")
-    parser.add_argument("--reuse-extractions", type=Path, default=None,
-                        help="JSONL written by an earlier run (SAVE_EXTRACTIONS): skip the LLM, only re-apply replacement")
-    return parser.parse_args()
-
-
 def main():
-    args = parse_args()
-    if args.config:
-        config_module.load_config(args.config)
-
-    if not config:
-        raise SystemExit("No config loaded: pass --config <file>, e.g. --config config/rambam.yaml")
-    if args.data_path:
-        config["DATA_PATH"] = args.data_path
+    load_config()
     validate_config(config)
     data_path = Path(config["DATA_PATH"])
     df = load_input(data_path, config["COLUMNS_TO_DEIDENTIFY"])
     validate_config(config, df)
 
-    reused = load_extractions(args.reuse_extractions) if args.reuse_extractions else None
+    reuse_path = config.get("REUSE_EXTRACTIONS")
+    reused = load_extractions(Path(reuse_path)) if reuse_path else None
     model = None
-    if reused is None:
+    if reused is not None:
+        # Said at the start, so a REUSE_EXTRACTIONS left set from an earlier run is noticed before the run ends.
+        logger.info(f"Reusing extractions from {reuse_path}; model not loaded")
+    else:
         model = load_model(model_path=config["MODEL_PATH"])
         logger.info("Model loaded successfully")
     system_prompt = get_system_prompt()

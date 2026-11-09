@@ -223,7 +223,7 @@ def _run_info(client, args, eval_set_path: Path) -> dict:
         "annotated_set": str(args.annotated) if args.annotated else None,
         "tokenizer": args.tokenizer,
         "limit": args.limit,
-        "config": args.config or "config/config.yaml (local default)",
+        "config": f"config/config.yaml + config/{config['HOSPITAL_CONFIG']}.yaml",
         "switches": {k: config.get(k) for k in ("NAME_LISTS", "SAFE_TEXT_MATCHING", "REGEX_BACKSTOP", "DATE_MODE")},
     }
 
@@ -382,10 +382,9 @@ def format_report(report: dict) -> str:
 
 
 def main():
+    # Settings come from config/config.yaml + its HOSPITAL_CONFIG file: that file's DATA_PATH feeds build-eval-set,
+    # its switches are scored by run. Models are comparable only when scored with the same hospital config.
     parser = argparse.ArgumentParser(description="Evaluate an LLM on the anonymization pipeline")
-    parser.add_argument("--config", default=None,
-                        help="Config file (before the command), e.g. config/rambam.yaml: its DATA_PATH feeds build-eval-set, "
-                             "its switches are scored by run. Models are comparable only when scored with the same config.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build-eval-set", help="Freeze the injected samples to a file")
@@ -410,8 +409,7 @@ def main():
     args = parser.parse_args()
     if args.command == "run" and args.annotated and not args.tokenizer:
         parser.error("--tokenizer (or TOKENIZER_PATH in .env) is needed for the retention metric")
-    if args.config:
-        load_config(args.config)
+    load_config()
     if args.command == "run" and not args.host:
         args.host = config["OLLAMA_CONFIG"]["HOST"]
     if args.command == "build-eval-set":

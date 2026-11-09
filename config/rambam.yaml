@@ -1,10 +1,9 @@
-# Config for the Rambam data: every privacy switch on. Complete on its own.
+# Config for the Rambam data: every privacy switch on.
 # BEFORE RUNNING: replace every FILL_ME below (README, "Running on the Rambam data"). The run stops at once
 # while a FILL_ME is left or a column is not in the file.
-# Run: python src/main.py --config config/rambam.yaml
+# Run: set HOSPITAL_CONFIG: rambam in config/config.yaml, then python src/main.py
 DATA_PATH: FILL_ME                 # the notes CSV, e.g. data/rambam_notes.csv
 COLUMNS_TO_DEIDENTIFY: [FILL_ME]   # the free-text column(s), e.g. ["note_text"]
-MODEL_PATH: ${MODEL_PATH}         # vLLM only; not used with Ollama
 
 NAME_LISTS: true
 SAFE_TEXT_MATCHING: true
@@ -17,6 +16,7 @@ BIRTHDATE_FORMAT: null
 AGE_COLUMNS: []                   # structured age columns, top-coded at 90 in the shareable file
 FLAGS_COLUMN: true
 SAVE_EXTRACTIONS: true
+REUSE_EXTRACTIONS: null    # a <input>_extractions.jsonl = skip the model, only re-apply replacement; set back to null after
 # Only these columns go into <input>_shareable.csv: the patient ID column, the visit-date column, and for each
 # text column <column>_deidentified and <column>_deid_flags. Raw text and birthdate columns are refused.
 SHARE_COLUMNS: [FILL_ME]
@@ -35,34 +35,4 @@ OLLAMA_CONFIG:
     "num_predict": 1024,   # Same as VLLM max_tokens
     "temperature": 0,
     "seed": 0,
-  }
-
-LLAMA_CPP_CONFIG:
-  MODEL_CONFIG: {
-    "n_ctx": 4096,
-    "verbose": False,
-    "n_gpu_layers": -1,  # -1 to load to all GPU layers, 0 for none
-    "n_threads": 64,
-    "n_threads_batch": 64,
-    "n_batch": 1024,
-    "flash_attn": True,
-  }
-  GENERATION_CONFIG: {
-    "max_tokens": 1024,  # was 1200
-    "temperature": 0,
-  }
-
-# vLLM configuration (BACKEND: ollama). Uses the Hugging Face safetensors model in MODEL_PATH (not GGUF)
-VLLM_CONFIG:
-  MODEL_CONFIG: {
-    "tensor_parallel_size": 2,          # Number of GPUs for tensor parallelism (4x L40 = ~184GB total VRAM)
-    "gpu_memory_utilization": 0.85,     # Fraction of GPU memory vLLM can use for KV cache + model (0.85 leaves headroom for CUDA graphs)
-    "max_model_len": 16384,              # Max context length (equivalent to n_ctx in llama-cpp-python), was 4096
-    "enable_prefix_caching": True,      # Cache KV states for shared prompt prefixes (replaces LlamaRAMCache)
-    "dtype": "bfloat16",                # Model dtype (safetensors are in bfloat16)
-    "enforce_eager": True,              # Disable torch.compile to avoid Dynamo errors
-  }
-  GENERATION_CONFIG: {
-    "max_tokens": 1024,
-    "temperature": 0,
   }

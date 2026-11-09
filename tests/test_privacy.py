@@ -3,6 +3,7 @@
 import datetime as dt
 import importlib
 import json
+import re
 import sys
 from types import SimpleNamespace
 
@@ -217,7 +218,7 @@ def test_main_end_to_end_with_flags_extractions_and_reuse(monkeypatch, tmp_path,
     monkeypatch.setattr(main, "extract_pii_from_text",
                         lambda **kwargs: [{"doctor_name": ["ד\"ר לוי"], "intervention_dates": ["01/01/2024"]}])
 
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main, "load_config", lambda: None)
     main.main()
     expected = f"{DOC}, [DATE_DAY_-35], {PHONE}"
     final = pd.read_csv(tmp_path / "notes_deidentified_final.csv")
@@ -228,7 +229,7 @@ def test_main_end_to_end_with_flags_extractions_and_reuse(monkeypatch, tmp_path,
     # Re-applying from the saved extractions must not need the model and must give the same text.
     monkeypatch.setattr(main, "load_model", lambda model_path: pytest.fail("model loaded"))
     (tmp_path / "notes_deidentified_final.csv").unlink()
-    monkeypatch.setattr(sys, "argv", ["main.py", "--reuse-extractions", str(tmp_path / "notes_extractions.jsonl")])
+    cfg["REUSE_EXTRACTIONS"] = str(tmp_path / "notes_extractions.jsonl")
     main.main()
     assert pd.read_csv(tmp_path / "notes_deidentified_final.csv").loc[0, "note_deidentified"] == expected
     saved = [json.loads(line) for line in (tmp_path / "notes_extractions.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -326,9 +327,22 @@ def test_config_errors_stop_before_the_model_loads(override, message):
         utils.validate_config({**cfg, **override}, df)
 
 
-def test_shipped_rambam_config_refuses_to_run_until_filled():
+@pytest.mark.parametrize("hospital", ["rambam", "hy", "hy_injections"])
+def test_shipped_configs_load_and_refuse_to_run_until_filled(monkeypatch, tmp_path, hospital):
+    # The real config files, with HOSPITAL_CONFIG switched: a key in both files would fail here.
     config_module = importlib.import_module("config")
-    cfg = config_module.get_config("config/rambam.yaml")
-    assert cfg["BACKEND"] == "ollama" and "OLLAMA_CONFIG" in cfg and "VLLM_CONFIG" in cfg  # complete on its own
+    real = config_module.CONFIG_DIR
+    if not (real / f"{hospital}.yaml").exists():
+        pytest.skip(f"config/{hospital}.yaml is local only")
+    shared = (real / "config.yaml").read_text(encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(re.sub(r"^HOSPITAL_CONFIG:.*$", f"HOSPITAL_CONFIG: {hospital}", shared, flags=re.M),
+                                          encoding="utf-8")
+    (tmp_path / f"{hospital}.yaml").write_text((real / f"{hospital}.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(config_module, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config_module, "config", {})
+
+    cfg = config_module.load_config()
+    assert cfg["BACKEND"] == "ollama" and "OLLAMA_CONFIG" in cfg and "VLLM_CONFIG" in cfg
+    assert cfg["REUSE_EXTRACTIONS"] is None  # a shipped config must always run the model
     with pytest.raises(ValueError, match="Fill in"):
         utils.validate_config(cfg, pd.DataFrame({"x": ["text"]}))

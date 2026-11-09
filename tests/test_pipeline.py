@@ -25,7 +25,7 @@ def test_valid_text_records_preserve_original_indices(monkeypatch):
 
 def test_main_fails_before_writing_when_model_result_count_differs(monkeypatch, tmp_path):
     main = importlib.import_module("main")
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main, "load_config", lambda: None)
     input_path = tmp_path / "input.csv"
     output_path = tmp_path / "input_deidentified_final.csv"
     pd.DataFrame({"text": ["first", "second", "third"]}).to_csv(input_path, index=False)
@@ -49,7 +49,7 @@ def test_main_fails_before_writing_when_model_result_count_differs(monkeypatch, 
 
 def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_path):
     main = importlib.import_module("main")
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main, "load_config", lambda: None)
     input_path = tmp_path / "input.csv"
     output_path = tmp_path / "input_deidentified_final.csv"
     pd.DataFrame({"id": [1], "text": ["first\nsecond"]}).to_csv(input_path, index=False)
@@ -77,7 +77,7 @@ def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_p
 
 def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
     main = importlib.import_module("main")
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main, "load_config", lambda: None)
     input_path = tmp_path / "input.txt"
     output_path = tmp_path / "input_deidentified_final.csv"
     input_path.write_text("first note\nsecond note\n", encoding="utf-8")
@@ -103,7 +103,7 @@ def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
 
 def test_txt_input_rejects_multiple_configured_columns(monkeypatch, tmp_path):
     main = importlib.import_module("main")
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main, "load_config", lambda: None)
     input_path = tmp_path / "input.txt"
     input_path.write_text("note", encoding="utf-8")
 
@@ -119,54 +119,51 @@ def test_txt_input_rejects_multiple_configured_columns(monkeypatch, tmp_path):
         main.main()
 
 
-def test_config_paths_are_independent_of_working_directory(monkeypatch, tmp_path):
-    monkeypatch.setenv("MODEL_PATH", "/tmp/test-model")
-    config_module = importlib.import_module("config")
+def write_configs(folder, shared: str, hospitals: dict):
+    """A config folder of its own: config.yaml plus one <name>.yaml per hospital."""
+    (folder / "config.yaml").write_text(shared, encoding="utf-8")
+    for name, text in hospitals.items():
+        (folder / f"{name}.yaml").write_text(text, encoding="utf-8")
 
-    # A config of its own (config/config.yaml is not in the repository): relative paths start at the repo root.
-    config_file = tmp_path / "test.yaml"
-    config_file.write_text('DATA_PATH: data/notes.csv\nMODEL_PATH: ${MODEL_PATH}\n', encoding="utf-8")
+
+@pytest.fixture
+def config_module(monkeypatch, tmp_path):
+    """config.py reading from tmp_path, with its own `config` dict so no test leaks settings into another."""
+    module = importlib.import_module("config")
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(module, "config", {})
+    return module
+
+
+def test_hospital_config_is_added_to_the_shared_one(monkeypatch, tmp_path, config_module):
+    monkeypatch.setenv("MODEL_PATH", "/tmp/test-model")
+    write_configs(tmp_path, "HOSPITAL_CONFIG: a\nMODEL_PATH: ${MODEL_PATH}\n",
+                  {"a": "DATA_PATH: data/notes.csv\nREGEX_BACKSTOP: true\n", "b": "REGEX_BACKSTOP: false\n"})
 
     import os
     original_directory = os.getcwd()
     try:
-        os.chdir(tmp_path)
-        loaded = config_module.get_config(config_file)
+        os.chdir(tmp_path)  # relative paths start at the repo root, not at the working directory
+        loaded = config_module.load_config()
     finally:
         os.chdir(original_directory)
 
-    assert loaded["DATA_PATH"] == str(config_module.PROJECT_ROOT / "data" / "notes.csv")
-    assert loaded["MODEL_PATH"] == "/tmp/test-model"
+    assert loaded is config_module.config  # filled in place: other modules hold this dict
+    assert loaded == {"HOSPITAL_CONFIG": "a", "MODEL_PATH": "/tmp/test-model", "REGEX_BACKSTOP": True,
+                      "DATA_PATH": str(config_module.PROJECT_ROOT / "data" / "notes.csv")}
 
 
-def test_missing_default_config_gives_an_empty_config(monkeypatch, tmp_path):
-    # On a fresh clone there is no config/config.yaml: importing must not crash (main.py then asks for --config).
-    config_module = importlib.import_module("config")
-    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
-    assert config_module.get_config() == {}
+def test_key_in_both_files_stops_the_run(tmp_path, config_module):
+    # Otherwise a switch turned on in config.yaml would be silently undone by the hospital file.
+    write_configs(tmp_path, "HOSPITAL_CONFIG: a\nREGEX_BACKSTOP: true\n", {"a": "REGEX_BACKSTOP: false\n"})
+    with pytest.raises(ValueError, match="REGEX_BACKSTOP"):
+        config_module.load_config()
 
 
-def test_setup_scripts_use_the_single_requirements_file():
-    for path in ("scripts/setup.sh",):
-        with open(path, encoding="utf-8") as file:
-            contents = file.read()
-        assert "requirements.txt" in contents
-        assert "requirements_cpu.txt" not in contents
-        assert "requirements_gpu.txt" not in contents
-
-
-def test_age_is_redacted_only_as_a_whole_number(monkeypatch):
-    # Synthetic note: the age must not be cut out of visual acuity, IOP or date values.
-    utils = load_utils(monkeypatch)
-    text = "בן 71. בן71, VA 0.71, 6/71, IOP 171, 71/80, date 3.4.71"
-    tag = "[REDACTED_PATIENT_AGE]"
-    assert utils.remove_pii_from_text(text, {"patient_age": 71}) == (
-        f"בן {tag}. בן{tag}, VA 0.71, 6/71, IOP 171, 71/80, date 3.4.71"
-    )
-
-
-def test_patient_id_keeps_plain_replacement(monkeypatch):
-    # An ID glued to a date by a lost line break must still be removed.
-    utils = load_utils(monkeypatch)
-    text = "ID 12345678917/01/22"
-    assert utils.remove_pii_from_text(text, {"patient_id": "123456789"}) == "ID [REDACTED_PATIENT_ID]17/01/22"
+def test_unknown_or_missing_hospital_stops_the_run(tmp_path, config_module):
+    write_configs(tmp_path, "HOSPITAL_CONFIG: absent\n", {"a": "DATA_PATH: x.csv\n"})
+    with pytest.raises(FileNotFoundError, match="available: \\['a'\\]"):
+        config_module.load_config()
+    write_configs(tmp_path, "MODEL_PATH: x\n", {})
+    with pytest.raises(ValueError, match="HOSPITAL_CONFIG"):
+        config_module.load_config()

@@ -593,7 +593,7 @@ def load_input(data_path: Path, columns: list[str]) -> pd.DataFrame:
     raise ValueError("Unsupported file format. Please provide a .csv or .txt file.")
 
 
-FILL_ME = "FILL_ME"  # placeholder in config/rambam.yaml for values only the site running it knows
+FILL_ME = "FILL_ME"  # placeholder in the hospital configs for values only the site running it knows
 
 
 def validate_config(cfg: dict, df: pd.DataFrame = None) -> None:
@@ -608,7 +608,7 @@ def validate_config(cfg: dict, df: pd.DataFrame = None) -> None:
     required = ["DATA_PATH", "COLUMNS_TO_DEIDENTIFY", "BACKEND", "OLLAMA_CONFIG" if backend == "ollama" else "VLLM_CONFIG"]
     absent = [key for key in required if key not in cfg]
     if absent:
-        raise ValueError(f"The config misses these keys (every config must be complete on its own): {absent}")
+        raise ValueError(f"The config misses these keys (see config/config.yaml and the hospital file): {absent}")
     unfilled = [key for key, value in cfg.items()
                 if value == FILL_ME or (isinstance(value, list) and FILL_ME in value)]
     if unfilled:
