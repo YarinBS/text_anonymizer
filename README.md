@@ -14,8 +14,8 @@ What is removed, what is kept and what risks remain, for reviewers of the output
 | `src/date_shift.py` | dates in the text → offsets from the visit date |
 | `src/evaluate.py`, `src/eval_injection.py` | model evaluation (below) |
 | `scripts/audit_output.py` | counts possible PII left in an output file (counts only, never text) |
-| `config/config.yaml` | default config (original output format); `--config` files override it |
-| `config/hy.yaml`, `config/rambam.yaml` | overrides for the HY and Rambam data |
+| `config/rambam.yaml` | config for the Rambam data (every switch on) |
+| `config/hy_injections.yaml` | config for the HY injection notes (every switch on, dates kept) |
 | `tests/` | unit tests, synthetic text only |
 | `src/legacy/` | earlier scripts, not used by the pipeline |
 
@@ -47,9 +47,9 @@ Every placeholder, and the date rules: [DEIDENTIFICATION.md](DEIDENTIFICATION.md
 
 ### Privacy switches
 
-`config/config.yaml` has every switch off. It keeps the original output format: dates stay in the text, and names are replaced by plain string matching. A `--config` file holds only the keys it changes, on top of `config/config.yaml` (nested blocks such as `OLLAMA_CONFIG` are merged one level deep):
-- `config/hy.yaml` (HY data): every switch on except `DATE_MODE: keep`;
-- `config/rambam.yaml`: every switch on.
+Every config file is complete on its own (data, switches, backend settings); a run reads only the file given with `--config`. A switch left out counts as off, which keeps the original output format: dates stay in the text, and names are replaced by plain string matching.
+- `config/rambam.yaml`: every switch on;
+- `config/hy_injections.yaml`: every switch on except `DATE_MODE: keep`.
 
 | Switch | Effect |
 |---|---|
@@ -82,7 +82,7 @@ Set the model path in `.env` (template: `.env.example`) or in the environment:
 MODEL_PATH=/path/to/Llama-3.3-70B-Instruct
 ```
 
-In the config file:
+In the config file (start from one of the two in `config/`):
 - `DATA_PATH`: the input CSV or TXT file (relative paths start at the repository root);
 - `COLUMNS_TO_DEIDENTIFY`: the text columns (TXT input: exactly one name);
 - `BACKEND`: `vllm` (with `VLLM_CONFIG`) or `ollama` (with `OLLAMA_CONFIG`);
@@ -99,9 +99,8 @@ In the config file:
 ## Usage
 
 ```bash
-python src/main.py                                   # config/config.yaml
-python src/main.py --config config/rambam.yaml       # all privacy switches on
-python src/main.py --config config/hy.yaml --data-path <file.csv>   # HY data (injections: config/hy_injections.yaml)
+python src/main.py --config config/rambam.yaml       # all privacy switches on (--config is required)
+python src/main.py --config <cfg> --data-path <file.csv>             # same config, another input file
 python src/main.py --config <cfg> --reuse-extractions <input>_extractions.jsonl   # re-apply replacement, no model
 ```
 
@@ -139,7 +138,7 @@ For TXT input, each non-empty line is one record. If the model returns a differe
 
 ### Model quality: `src/evaluate.py` (Ollama backend)
 
-`src/evaluate.py` scores one Ollama model. It writes `results/eval_<model>_<time>.json` and `.txt`, with every example used. It scores the switches of `--config` (default: `config/config.yaml`); compare models only when they were scored with the same config.
+`src/evaluate.py` scores one Ollama model. It writes `results/eval_<model>_<time>.json` and `.txt`, with every example used. It scores the switches of the `--config` file; compare models only when they were scored with the same config.
 
 1. **Synthetic PII injection recall.** Real notes get injected PII of known value (`eval_injection.py`). The frozen set is in `data/eval_sets/`, so every model gets the same inputs. Recall = injected values the model returned / injected values, per category.
 2. **Residual PII rate**, on the 100 annotated notes (`data/tagged_samples.json`): the share of ground-truth PII values still in the de-identified text.

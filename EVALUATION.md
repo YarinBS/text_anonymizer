@@ -58,7 +58,7 @@ ollama create gemma4-12b-q8 -f Modelfile
 
 Fill in `config/rambam.yaml` as described in the README ("Running on the Rambam data"): every `FILL_ME` value. The evaluation uses its `DATA_PATH`, the first name in `COLUMNS_TO_DEIDENTIFY` (the text column), and its privacy switches. It already sets `BACKEND: ollama`.
 
-Leave `OLLAMA_CONFIG` in `config/config.yaml` as it is (`num_ctx: 8192`, `NUM_PARALLEL: 1`). If Ollama does not run at its default address (`http://127.0.0.1:11434`), add `--host <address>` to the `run` commands below.
+Leave `OLLAMA_CONFIG` in `config/rambam.yaml` as it is (`num_ctx: 8192`, `NUM_PARALLEL: 1`). If Ollama does not run at its default address (`http://127.0.0.1:11434`), add `--host <address>` to the `run` commands below.
 
 ## 2. Build the test set (once)
 
