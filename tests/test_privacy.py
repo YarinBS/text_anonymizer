@@ -209,6 +209,7 @@ def test_main_end_to_end_with_flags_extractions_and_reuse(monkeypatch, tmp_path,
     input_path = tmp_path / "notes.csv"
     pd.DataFrame({"pid": ["p1"], "visit": ["2024-02-05"], "note": ["ד\"ר לוי, 01/01/2024, 050-1234567"]}).to_csv(input_path, index=False)
     cfg = {"DATA_PATH": str(input_path), "COLUMNS_TO_DEIDENTIFY": ["note"], "MODEL_PATH": "/tmp/m",
+           "BACKEND": "vllm", "VLLM_CONFIG": {},
            "VISIT_DATE_COLUMN": "visit", "FLAGS_COLUMN": True, "SAVE_EXTRACTIONS": True,
            "SHARE_COLUMNS": ["pid", "note_deidentified"]}
     monkeypatch.setattr(main, "config", cfg)
@@ -216,6 +217,7 @@ def test_main_end_to_end_with_flags_extractions_and_reuse(monkeypatch, tmp_path,
     monkeypatch.setattr(main, "extract_pii_from_text",
                         lambda **kwargs: [{"doctor_name": ["ד\"ר לוי"], "intervention_dates": ["01/01/2024"]}])
 
+    monkeypatch.setattr(sys, "argv", ["main.py"])
     main.main()
     expected = f"{DOC}, [DATE_DAY_-35], {PHONE}"
     final = pd.read_csv(tmp_path / "notes_deidentified_final.csv")
@@ -226,7 +228,8 @@ def test_main_end_to_end_with_flags_extractions_and_reuse(monkeypatch, tmp_path,
     # Re-applying from the saved extractions must not need the model and must give the same text.
     monkeypatch.setattr(main, "load_model", lambda model_path: pytest.fail("model loaded"))
     (tmp_path / "notes_deidentified_final.csv").unlink()
-    main.main(["--reuse-extractions", str(tmp_path / "notes_extractions.jsonl")])
+    monkeypatch.setattr(sys, "argv", ["main.py", "--reuse-extractions", str(tmp_path / "notes_extractions.jsonl")])
+    main.main()
     assert pd.read_csv(tmp_path / "notes_deidentified_final.csv").loc[0, "note_deidentified"] == expected
     saved = [json.loads(line) for line in (tmp_path / "notes_extractions.jsonl").read_text(encoding="utf-8").splitlines()]
     assert saved[0]["column"] == "note" and saved[0]["row"] == 0
@@ -311,10 +314,12 @@ def test_residual_counts_failed_rows_and_whole_number_ages():
     ({"COLUMNS_TO_DEIDENTIFY": ["missing_col"]}, "not found in the data"),
     ({"VISIT_DATE_COLUMN": "missing_col"}, "not found in the data"),
     ({"SHARE_COLUMNS": ["note_raw_typo"]}, "SHARE_COLUMNS not found"),
+    ({"OLLAMA_CONFIG": None, "BACKEND": "vllm"}, "misses these keys"),
 ])
 def test_config_errors_stop_before_the_model_loads(override, message):
     df = pd.DataFrame({"pid": ["a"], "visit": ["2024-01-01"], "note": ["text"]})
-    cfg = {"COLUMNS_TO_DEIDENTIFY": ["note"], "DATE_MODE": "visit_offset", "VISIT_DATE_COLUMN": "visit",
+    cfg = {"DATA_PATH": "notes.csv", "BACKEND": "ollama", "OLLAMA_CONFIG": {},
+           "COLUMNS_TO_DEIDENTIFY": ["note"], "DATE_MODE": "visit_offset", "VISIT_DATE_COLUMN": "visit",
            "BIRTHDATE_COLUMN": None, "SHARE_COLUMNS": ["pid", "note_deidentified", "note_deid_flags"]}
     utils.validate_config(cfg, df)  # the valid config passes
     with pytest.raises(ValueError, match=message):
@@ -324,6 +329,6 @@ def test_config_errors_stop_before_the_model_loads(override, message):
 def test_shipped_rambam_config_refuses_to_run_until_filled():
     config_module = importlib.import_module("config")
     cfg = config_module.get_config("config/rambam.yaml")
-    assert cfg["BACKEND"] == "ollama"
+    assert cfg["BACKEND"] == "ollama" and "OLLAMA_CONFIG" in cfg and "VLLM_CONFIG" in cfg  # complete on its own
     with pytest.raises(ValueError, match="Fill in"):
         utils.validate_config(cfg, pd.DataFrame({"x": ["text"]}))

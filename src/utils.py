@@ -604,6 +604,11 @@ def validate_config(cfg: dict, df: pd.DataFrame = None) -> None:
     otherwise give a confusing file error), and with `df` once it is read (column names need the data),
     always before load_model, which takes minutes on the hospital machine.
     """
+    backend = cfg.get("BACKEND", "vllm")
+    required = ["DATA_PATH", "COLUMNS_TO_DEIDENTIFY", "BACKEND", "OLLAMA_CONFIG" if backend == "ollama" else "VLLM_CONFIG"]
+    absent = [key for key in required if key not in cfg]
+    if absent:
+        raise ValueError(f"The config misses these keys (every config must be complete on its own): {absent}")
     unfilled = [key for key, value in cfg.items()
                 if value == FILL_ME or (isinstance(value, list) and FILL_ME in value)]
     if unfilled:

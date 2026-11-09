@@ -25,6 +25,7 @@ def test_valid_text_records_preserve_original_indices(monkeypatch):
 
 def test_main_fails_before_writing_when_model_result_count_differs(monkeypatch, tmp_path):
     main = importlib.import_module("main")
+    monkeypatch.setattr(sys, "argv", ["main.py"])
     input_path = tmp_path / "input.csv"
     output_path = tmp_path / "input_deidentified_final.csv"
     pd.DataFrame({"text": ["first", "second", "third"]}).to_csv(input_path, index=False)
@@ -33,6 +34,8 @@ def test_main_fails_before_writing_when_model_result_count_differs(monkeypatch, 
         "DATA_PATH": str(input_path),
         "COLUMNS_TO_DEIDENTIFY": ["text"],
         "MODEL_PATH": "/tmp/test-model",
+        "BACKEND": "vllm",
+        "VLLM_CONFIG": {},
     })
     monkeypatch.setattr(main, "load_model", lambda model_path: object())
     monkeypatch.setattr(main, "get_system_prompt", lambda: "prompt")
@@ -46,6 +49,7 @@ def test_main_fails_before_writing_when_model_result_count_differs(monkeypatch, 
 
 def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_path):
     main = importlib.import_module("main")
+    monkeypatch.setattr(sys, "argv", ["main.py"])
     input_path = tmp_path / "input.csv"
     output_path = tmp_path / "input_deidentified_final.csv"
     pd.DataFrame({"id": [1], "text": ["first\nsecond"]}).to_csv(input_path, index=False)
@@ -54,6 +58,8 @@ def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_p
         "DATA_PATH": str(input_path),
         "COLUMNS_TO_DEIDENTIFY": ["text"],
         "MODEL_PATH": "/tmp/test-model",
+        "BACKEND": "vllm",
+        "VLLM_CONFIG": {},
     })
     monkeypatch.setattr(main, "load_model", lambda model_path: object())
     monkeypatch.setattr(main, "get_system_prompt", lambda: "prompt")
@@ -71,6 +77,7 @@ def test_main_preserves_multiline_fields_and_original_columns(monkeypatch, tmp_p
 
 def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
     main = importlib.import_module("main")
+    monkeypatch.setattr(sys, "argv", ["main.py"])
     input_path = tmp_path / "input.txt"
     output_path = tmp_path / "input_deidentified_final.csv"
     input_path.write_text("first note\nsecond note\n", encoding="utf-8")
@@ -79,6 +86,8 @@ def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
         "DATA_PATH": str(input_path),
         "COLUMNS_TO_DEIDENTIFY": ["note"],
         "MODEL_PATH": "/tmp/test-model",
+        "BACKEND": "vllm",
+        "VLLM_CONFIG": {},
     })
     monkeypatch.setattr(main, "load_model", lambda model_path: object())
     monkeypatch.setattr(main, "get_system_prompt", lambda: "prompt")
@@ -94,6 +103,7 @@ def test_main_converts_txt_input_to_csv(monkeypatch, tmp_path):
 
 def test_txt_input_rejects_multiple_configured_columns(monkeypatch, tmp_path):
     main = importlib.import_module("main")
+    monkeypatch.setattr(sys, "argv", ["main.py"])
     input_path = tmp_path / "input.txt"
     input_path.write_text("note", encoding="utf-8")
 
@@ -101,6 +111,8 @@ def test_txt_input_rejects_multiple_configured_columns(monkeypatch, tmp_path):
         "DATA_PATH": str(input_path),
         "COLUMNS_TO_DEIDENTIFY": ["first", "second"],
         "MODEL_PATH": "/tmp/test-model",
+        "BACKEND": "vllm",
+        "VLLM_CONFIG": {},
     })
 
     with pytest.raises(ValueError, match="exactly one configured column"):
@@ -111,16 +123,27 @@ def test_config_paths_are_independent_of_working_directory(monkeypatch, tmp_path
     monkeypatch.setenv("MODEL_PATH", "/tmp/test-model")
     config_module = importlib.import_module("config")
 
+    # A config of its own (config/config.yaml is not in the repository): relative paths start at the repo root.
+    config_file = tmp_path / "test.yaml"
+    config_file.write_text('DATA_PATH: data/notes.csv\nMODEL_PATH: ${MODEL_PATH}\n', encoding="utf-8")
+
     import os
     original_directory = os.getcwd()
     try:
         os.chdir(tmp_path)
-        loaded = config_module.get_config()
+        loaded = config_module.get_config(config_file)
     finally:
         os.chdir(original_directory)
 
-    assert loaded["DATA_PATH"].endswith("data/only_injections_freetext.csv")
+    assert loaded["DATA_PATH"] == str(config_module.PROJECT_ROOT / "data" / "notes.csv")
     assert loaded["MODEL_PATH"] == "/tmp/test-model"
+
+
+def test_missing_default_config_gives_an_empty_config(monkeypatch, tmp_path):
+    # On a fresh clone there is no config/config.yaml: importing must not crash (main.py then asks for --config).
+    config_module = importlib.import_module("config")
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
+    assert config_module.get_config() == {}
 
 
 def test_setup_scripts_use_the_single_requirements_file():

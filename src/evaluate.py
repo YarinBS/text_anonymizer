@@ -223,7 +223,7 @@ def _run_info(client, args, eval_set_path: Path) -> dict:
         "annotated_set": str(args.annotated) if args.annotated else None,
         "tokenizer": args.tokenizer,
         "limit": args.limit,
-        "config": args.config or "config/config.yaml",
+        "config": args.config or "config/config.yaml (local default)",
         "switches": {k: config.get(k) for k in ("NAME_LISTS", "SAFE_TEXT_MATCHING", "REGEX_BACKSTOP", "DATE_MODE")},
     }
 
@@ -396,7 +396,7 @@ def main():
 
     evaluate = commands.add_parser("run", help="Evaluate one Ollama model")
     evaluate.add_argument("--model", required=True, help="Ollama model tag")
-    evaluate.add_argument("--host", default=config["OLLAMA_CONFIG"]["HOST"])
+    evaluate.add_argument("--host", default=None, help="Ollama address (default: OLLAMA_CONFIG.HOST of the config)")
     evaluate.add_argument("--gguf", help="GGUF file the tag was created from (recorded in the report only)")
     evaluate.add_argument("--eval-set", default=str(DEFAULT_EVAL_SET))
     evaluate.add_argument("--annotated", default=str(DEFAULT_ANNOTATED) if DEFAULT_ANNOTATED.exists() else None,
@@ -412,6 +412,8 @@ def main():
         parser.error("--tokenizer (or TOKENIZER_PATH in .env) is needed for the retention metric")
     if args.config:
         load_config(args.config)
+    if args.command == "run" and not args.host:
+        args.host = config["OLLAMA_CONFIG"]["HOST"]
     if args.command == "build-eval-set":
         build_eval_set(Path(args.output), args.from_report, args.seed, args.n_synthetic)
     else:

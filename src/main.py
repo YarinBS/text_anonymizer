@@ -13,7 +13,6 @@ Usage: python src/main.py [--config config/rambam.yaml] [--data-path <file>] [--
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import config as config_module
@@ -37,22 +36,26 @@ from utils import (date_column,
 logger = get_logger()
 
 
-def parse_args(argv) -> argparse.Namespace:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="De-identify clinical free text with a local LLM.")
-    parser.add_argument("--config", default=None, help="config file (default: config/config.yaml)")
+    parser.add_argument("--config", default=None, help="config file, e.g. config/rambam.yaml (required unless a local config/config.yaml exists)")
     parser.add_argument("--data-path", default=None, help="input file; overrides DATA_PATH of the config")
     parser.add_argument("--reuse-extractions", type=Path, default=None,
                         help="JSONL written by an earlier run (SAVE_EXTRACTIONS): skip the LLM, only re-apply replacement")
-    return parser.parse_args(argv)
+    return parser.parse_args()
 
 
-def main(argv=()):
-    args = parse_args(list(argv))
+def main():
+    args = parse_args()
     if args.config:
         config_module.load_config(args.config)
 
+    if not config:
+        raise SystemExit("No config loaded: pass --config <file>, e.g. --config config/rambam.yaml")
+    if args.data_path:
+        config["DATA_PATH"] = args.data_path
     validate_config(config)
-    data_path = Path(args.data_path or config["DATA_PATH"])
+    data_path = Path(config["DATA_PATH"])
     df = load_input(data_path, config["COLUMNS_TO_DEIDENTIFY"])
     validate_config(config, df)
 
@@ -125,4 +128,4 @@ def main(argv=()):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()

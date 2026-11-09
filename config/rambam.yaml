@@ -1,9 +1,10 @@
-# Overrides of config/config.yaml for the Rambam data: every privacy switch on.
+# Config for the Rambam data: every privacy switch on. Complete on its own.
 # BEFORE RUNNING: replace every FILL_ME below (README, "Running on the Rambam data"). The run stops at once
 # while a FILL_ME is left or a column is not in the file.
 # Run: python src/main.py --config config/rambam.yaml
 DATA_PATH: FILL_ME                 # the notes CSV, e.g. data/rambam_notes.csv
 COLUMNS_TO_DEIDENTIFY: [FILL_ME]   # the free-text column(s), e.g. ["note_text"]
+MODEL_PATH: ${MODEL_PATH}         # vLLM only; not used with Ollama
 
 NAME_LISTS: true
 SAFE_TEXT_MATCHING: true
@@ -20,5 +21,48 @@ SAVE_EXTRACTIONS: true
 # text column <column>_deidentified and <column>_deid_flags. Raw text and birthdate columns are refused.
 SHARE_COLUMNS: [FILL_ME]
 
-# Hospital machine: Ollama with Gemma-4-26B-A4B (Q3), see OLLAMA_CONFIG in config/config.yaml.
+# Hospital machine: Ollama with Gemma-4-26B-A4B (Q3).
+# Inference backend: "vllm" (Linux servers, MODEL_PATH) or "ollama" (e.g. the Windows hospital machine, OLLAMA_CONFIG)
 BACKEND: ollama
+
+OLLAMA_CONFIG:
+  HOST: http://127.0.0.1:11434   # Ollama's default address
+  MODEL: gemma4-26b-a4b-q3       # Ollama model tag (from `ollama create`); backup: gemma4-12b-q8
+  NUM_PARALLEL: 1                # Parallel requests; match the server's OLLAMA_NUM_PARALLEL. Each slot adds KV cache:
+                                 # on a 16 GB GPU (hospital RTX A4000) only 1 fits for Gemma 4 12B (13.4 GiB measured; 4 slots: 15.6 GiB)
+  OPTIONS: {
+    "num_ctx": 8192,       # Prompt is ~3k tokens + note (max ~0.7k) + JSON; Ollama silently cuts longer prompts
+    "num_predict": 1024,   # Same as VLLM max_tokens
+    "temperature": 0,
+    "seed": 0,
+  }
+
+LLAMA_CPP_CONFIG:
+  MODEL_CONFIG: {
+    "n_ctx": 4096,
+    "verbose": False,
+    "n_gpu_layers": -1,  # -1 to load to all GPU layers, 0 for none
+    "n_threads": 64,
+    "n_threads_batch": 64,
+    "n_batch": 1024,
+    "flash_attn": True,
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,  # was 1200
+    "temperature": 0,
+  }
+
+# vLLM configuration (BACKEND: ollama). Uses the Hugging Face safetensors model in MODEL_PATH (not GGUF)
+VLLM_CONFIG:
+  MODEL_CONFIG: {
+    "tensor_parallel_size": 2,          # Number of GPUs for tensor parallelism (4x L40 = ~184GB total VRAM)
+    "gpu_memory_utilization": 0.85,     # Fraction of GPU memory vLLM can use for KV cache + model (0.85 leaves headroom for CUDA graphs)
+    "max_model_len": 16384,              # Max context length (equivalent to n_ctx in llama-cpp-python), was 4096
+    "enable_prefix_caching": True,      # Cache KV states for shared prompt prefixes (replaces LlamaRAMCache)
+    "dtype": "bfloat16",                # Model dtype (safetensors are in bfloat16)
+    "enforce_eager": True,              # Disable torch.compile to avoid Dynamo errors
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,
+    "temperature": 0,
+  }

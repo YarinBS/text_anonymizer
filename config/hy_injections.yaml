@@ -1,18 +1,57 @@
-# Overrides of config/config.yaml for the HY injections file (injections_merged): same as config/hy.yaml, other text columns.
+# Config for the HY injections file (injections_merged): every privacy switch on, dates kept in the text. Complete on its own.
 # Run: python src/main.py --config config/hy_injections.yaml --data-path <csv>
+DATA_PATH: FILL_ME         # or pass --data-path
 COLUMNS_TO_DEIDENTIFY: ["summary_and_discussion", "comment", "current_disease", "Unnamed: 12", "Unnamed: 13"]
+MODEL_PATH: ${MODEL_PATH}
 
-NAME_LISTS: true
-SAFE_TEXT_MATCHING: true
-REGEX_BACKSTOP: true
-DATE_MODE: keep
-FLAGS_COLUMN: true
-SAVE_EXTRACTIONS: true
-SHARE_COLUMNS: []
+NAME_LISTS: true           # patient_name / doctor_name return every form (lists) instead of one string
+SAFE_TEXT_MATCHING: true   # longest value first, never inside placeholders, short names only as whole words
+REGEX_BACKSTOP: true       # phones, emails, URLs, Israeli IDs (check digit), "בן/בת/גיל NN" after the LLM
+DATE_MODE: keep            # dates stay in the text (the HY caption pipeline reads them)
+FLAGS_COLUMN: true         # add <column>_deid_flags (unmatched fields, backstop hits; no values)
+SAVE_EXTRACTIONS: true     # write <input>_extractions.jsonl (contains PII; internal), for --reuse-extractions
+SHARE_COLUMNS: []          # no shareable file for HY
 
-# Gemma-4-12B (Q8) on a parallel Ollama server.
+# Inference backend: "vllm" (Linux servers, MODEL_PATH) or "ollama" (e.g. the Windows hospital machine, OLLAMA_CONFIG)
 BACKEND: ollama
+
 OLLAMA_CONFIG:
-  HOST: http://127.0.0.1:11502
-  MODEL: gemma4-12b-q8
-  NUM_PARALLEL: 16
+  HOST: http://127.0.0.1:11502   # our parallel Ollama server
+  MODEL: gemma4-12b-q8           # Ollama model tag (from `ollama create`)
+  NUM_PARALLEL: 16               # Parallel requests; match the server's OLLAMA_NUM_PARALLEL (H200: room for 16 slots)
+  OPTIONS: {
+    "num_ctx": 8192,       # Prompt is ~3k tokens + note (max ~0.7k) + JSON; Ollama silently cuts longer prompts
+    "num_predict": 1024,   # Same as VLLM max_tokens
+    "temperature": 0,
+    "seed": 0,
+  }
+
+LLAMA_CPP_CONFIG:
+  MODEL_CONFIG: {
+    "n_ctx": 4096,
+    "verbose": False,
+    "n_gpu_layers": -1,  # -1 to load to all GPU layers, 0 for none
+    "n_threads": 64,
+    "n_threads_batch": 64,
+    "n_batch": 1024,
+    "flash_attn": True,
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,  # was 1200
+    "temperature": 0,
+  }
+
+# vLLM configuration (BACKEND: ollama). Uses the Hugging Face safetensors model in MODEL_PATH (not GGUF)
+VLLM_CONFIG:
+  MODEL_CONFIG: {
+    "tensor_parallel_size": 2,          # Number of GPUs for tensor parallelism (4x L40 = ~184GB total VRAM)
+    "gpu_memory_utilization": 0.85,     # Fraction of GPU memory vLLM can use for KV cache + model (0.85 leaves headroom for CUDA graphs)
+    "max_model_len": 16384,              # Max context length (equivalent to n_ctx in llama-cpp-python), was 4096
+    "enable_prefix_caching": True,      # Cache KV states for shared prompt prefixes (replaces LlamaRAMCache)
+    "dtype": "bfloat16",                # Model dtype (safetensors are in bfloat16)
+    "enforce_eager": True,              # Disable torch.compile to avoid Dynamo errors
+  }
+  GENERATION_CONFIG: {
+    "max_tokens": 1024,
+    "temperature": 0,
+  }
